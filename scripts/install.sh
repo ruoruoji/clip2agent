@@ -121,7 +121,12 @@ download() {
   url="$1"
   dest="$2"
   echo "==> Downloading $(basename "$dest")"
-  curl -fsSL "$url" -o "$dest"
+  http_code=$(curl -sSL -w '%{http_code}' -o "$dest" "$url" || true)
+  if [ -z "$http_code" ] || [ "$http_code" != "200" ]; then
+    rm -f "$dest"
+    echo "download failed (${http_code:-unknown}): $url" >&2
+    return 1
+  fi
 }
 
 verify_asset() {
@@ -180,7 +185,29 @@ trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 mkdir -p "$BIN_DIR"
 
-download "$base_url/$checksums_asset" "$tmpdir/$checksums_asset"
+if ! download "$base_url/$checksums_asset" "$tmpdir/$checksums_asset"; then
+  echo "==> GitHub Releases assets not found for ${REPO} (${VERSION}); falling back to 'go install'" >&2
+  need_cmd go
+
+  pkg="github.com/${REPO}/cmd/clip2agent"
+  if [ "$VERSION" = "latest" ]; then
+    goversion="@latest"
+  else
+    goversion="@${VERSION}"
+  fi
+
+  GOBIN="$BIN_DIR" go install "${pkg}${goversion}"
+  echo "==> Installed to $BIN_DIR"
+  echo "==> clip2agent version source: go install ${goversion}"
+
+  if [ "$goos" = "darwin" ] && [ "$INSTALL_MACOS_HELPERS" = "true" ]; then
+    echo "==> Note: macOS helpers are not installed in fallback mode; build from source if needed." >&2
+  fi
+
+  echo "==> Done"
+  exit 0
+fi
+
 download "$base_url/$cli_asset" "$tmpdir/$cli_asset"
 verify_asset "$tmpdir/$checksums_asset" "$cli_asset" "$tmpdir/$cli_asset"
 

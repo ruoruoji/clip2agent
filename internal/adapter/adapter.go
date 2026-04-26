@@ -41,10 +41,8 @@ func (cocoAdapter) AdaptPath(p render.PathPayload, opt Options) (string, error) 
 	if opt.OnlyPayload {
 		return ref, nil
 	}
-	// 使用 plan.md 里的排障模板
-	tpl := "请分析这张截图中的报错信息，提取关键异常、定位可能原因，并给出修复步骤：\n{image_ref}"
-	out := strings.ReplaceAll(tpl, "{image_ref}", ref)
-	return out, nil
+	// 默认只输出图片引用（不附带固定提示词）
+	return ref, nil
 }
 
 func (cocoAdapter) AdaptBase64(_ render.Base64Payload, _ Options) (string, error) {

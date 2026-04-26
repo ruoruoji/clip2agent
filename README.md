@@ -51,6 +51,8 @@
 curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh
 ```
 
+说明：该脚本优先从 GitHub Releases 拉取预编译产物；如果仓库还没有发布 Release，会自动 fallback 到 `go install`（fallback 模式仅安装 `clip2agent`，不会安装 macOS helpers）。
+
 常用参数：
 
 - 安装指定版本：`curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | VERSION=v0.1.0 sh`
@@ -64,6 +66,32 @@ curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/in
 - 校验 `checksums.txt`
 - 安装 `clip2agent`
 - 在 macOS 上默认额外安装 `clip2agent-macos` 与 `clip2agent-hotkey`
+
+### 卸载
+
+推荐使用 CLI 一键卸载（跨平台）：
+
+```bash
+clip2agent uninstall
+
+# 仅查看将执行的动作（不实际删除）
+clip2agent uninstall --dry-run
+
+# 彻底清理（会删除 kept-dir，可能包含你保留的图片；需要显式确认）
+clip2agent uninstall --purge --yes
+```
+
+如果你是通过脚本安装的，也可以用脚本卸载（macOS / Linux）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | sh
+
+# dry-run
+curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | DRY_RUN=true sh
+
+# purge（危险：删除 kept-dir）
+curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | PURGE=true YES=true sh
+```
 
 ### 方式二：从 GitHub Releases 下载
 
@@ -114,7 +142,7 @@ clip2agent setup --verify --json
 clip2agent
 ```
 
-把图片落盘并输出适合 `Coco` 的内容：
+把图片落盘并输出适合 `Coco` 的内容（默认不附带固定提示词）：
 
 ```bash
 clip2agent path --target coco
@@ -157,6 +185,7 @@ clip2agent hybrid
 - `clip2agent gc`：清理临时文件
 - `clip2agent config`：管理热键配置
 - `clip2agent hotkey`：管理或触发全局热键能力
+- `clip2agent uninstall`：卸载（默认安全；彻底清理需 `--purge --yes`）
 
 查看帮助：
 
@@ -213,7 +242,13 @@ clip2agent hotkey doctor
 clip2agent hotkey restart
 clip2agent hotkey logs
 clip2agent hotkey uninstall
+clip2agent uninstall
 ```
+
+说明：
+
+- `clip2agent hotkey uninstall` 仅卸载热键服务（LaunchAgent + plist），不会删除二进制/配置/临时文件
+- 需要“彻底移除”时用 `clip2agent uninstall`（可选 `--purge --yes`）
 
 如果启用了自动粘贴，需要授予系统“辅助功能”权限（配置项：`action.post.paste.enabled=true`，可选 `delay_ms`）。
 

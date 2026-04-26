@@ -175,7 +175,9 @@ jobs:
           path: release-assets
 
       - name: Add installer script
-        run: cp scripts/install.sh release-assets/install.sh
+        run: |
+          cp scripts/install.sh release-assets/install.sh
+          cp scripts/uninstall.sh release-assets/uninstall.sh
 
       - name: Generate checksums
         run: |

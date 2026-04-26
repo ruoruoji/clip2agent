@@ -73,8 +73,10 @@ func run() int {
 		return runSetup(ctx, os.Args[2:])
 	case "hotkey":
 		return runHotkey(ctx, os.Args[2:])
+	case "uninstall":
+		return runUninstall(ctx, os.Args[2:])
 	default:
-		errs.Fprint(os.Stderr, errs.E(errs.Code("E006"), "不支持的子命令", errs.Hint("支持: coco/path/base64/openai-json/data-uri/inspect/doctor/gc/config/setup/hotkey；或直接运行 `clip2agent --help`")))
+		errs.Fprint(os.Stderr, errs.E(errs.Code("E006"), "不支持的子命令", errs.Hint("支持: coco/path/base64/openai-json/data-uri/inspect/doctor/gc/config/setup/hotkey/uninstall；或直接运行 `clip2agent --help`")))
 		fmt.Fprintln(os.Stderr)
 		return 2
 	}
@@ -100,9 +102,10 @@ func usage() string {
 	clip2agent config <subcommand>
 	clip2agent setup  [flags]
 	clip2agent hotkey <subcommand>
+	clip2agent uninstall [flags]
 
 子命令:
-	path      落临时文件并输出路径（默认 target=coco 会输出 prompt）
+	path      落临时文件并输出路径（默认 target=coco）
 	base64    输出 base64 结构化 JSON（默认 target=openai）
 	coco      Coco 预设：输出 @路径（可配合 --copy 用于快捷键）
 	openai-json OpenAI 预设：等价于 base64 --target openai --json
@@ -115,6 +118,7 @@ func usage() string {
 	config    管理快捷键配置（hotkey.json）
 	setup     macOS 一键构建/安装 helper 与 hotkey 并初始化配置
 	hotkey    macOS 全局快捷键服务（LaunchAgent）管理
+	uninstall 卸载（默认安全；彻底清理需 --purge --yes）
 	init      输出 shell alias（只输出到 stdout，不写任何 rc 文件）
 
 快速排障:
@@ -365,7 +369,7 @@ func (c *commonFlags) bind(fs *flag.FlagSet) {
 	fs.DurationVar(&c.ttl, "ttl", 10*time.Minute, "临时文件 TTL（用于下次运行清理）")
 	fs.BoolVar(&c.keepFile, "keep-file", false, "保留文件（不进行 GC；且默认写入 kept-dir）")
 
-	fs.BoolVar(&c.stdout, "stdout", false, "仅输出载体（不加 prompt 模板）")
+	fs.BoolVar(&c.stdout, "stdout", false, "仅输出载体（不加额外提示）")
 	fs.BoolVar(&c.json, "json", false, "输出 JSON")
 	fs.BoolVar(&c.copy, "copy", false, "将输出写回系统剪贴板（用于快捷键工作流）")
 	fs.BoolVar(&c.debug, "debug", false, "输出调试信息（不打印完整 base64）")
