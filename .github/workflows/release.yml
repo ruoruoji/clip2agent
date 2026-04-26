@@ -121,7 +121,7 @@ jobs:
   build-swift-helpers:
     name: Build macOS helpers
     needs: verify
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -150,14 +150,21 @@ jobs:
               fi
             fi
 
-            # Build and capture bin path for this architecture.
+            # Build for this architecture.
             if [ -n "$wrapper" ]; then
+              arch -x86_64 swift build -c release --package-path native/macos --arch "$sarch"
               bin_path=$(arch -x86_64 swift build -c release --package-path native/macos --arch "$sarch" --show-bin-path)
             else
+              swift build -c release --package-path native/macos --arch "$sarch"
               bin_path=$(swift build -c release --package-path native/macos --arch "$sarch" --show-bin-path)
             fi
 
             echo "==> Swift bin path: ${bin_path}"
+            if [ ! -f "${bin_path}/clip2agent-macos" ] || [ ! -f "${bin_path}/clip2agent-hotkey" ]; then
+              echo "==> Missing expected binaries in ${bin_path}"
+              ls -la "${bin_path}" || true
+              exit 1
+            fi
 
             pkg_dir="package-${arch}"
             rm -rf "$pkg_dir"
