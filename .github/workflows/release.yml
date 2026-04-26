@@ -119,42 +119,64 @@ jobs:
           if-no-files-found: error
 
   build-swift-helpers:
-    name: Build macOS helpers (${{ matrix.goarch }})
+    name: Build macOS helpers
     needs: verify
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            goarch: amd64
-          - runner: macos-14
-            goarch: arm64
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Swift helpers
-        run: swift build -c release --package-path native/macos
-
-      - name: Package Swift helpers
+      - name: Build and package Swift helpers (arm64 + amd64)
         env:
           VERSION: ${{ github.ref_name }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          mkdir -p dist package
-          version="${VERSION#v}"
-          asset="clip2agent_${version}_darwin_${GOARCH}_helpers.tar.gz"
-          cp README.md LICENSE package/
-          cp native/macos/.build/release/clip2agent-macos package/
-          cp native/macos/.build/release/clip2agent-hotkey package/
-          tar -C package -czf "dist/${asset}" .
 
-      - name: Upload helper asset
+          version="${VERSION#v}"
+
+          mkdir -p dist
+
+          build_one() {
+            arch="$1"   # arm64|amd64
+            sarch="$2"  # arm64|x86_64 (swift arch)
+            wrapper="$3" # "" or "arch -x86_64"
+
+            echo "==> Building Swift helpers for ${arch} (${sarch})"
+            if [ -n "$wrapper" ]; then
+              # Ensure Rosetta is available (best-effort)
+              if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+                echo "==> Installing Rosetta (best-effort)"
+                sudo softwareupdate --install-rosetta --agree-to-license || true
+              fi
+            fi
+
+            # Build and capture bin path for this architecture.
+            if [ -n "$wrapper" ]; then
+              bin_path=$(arch -x86_64 swift build -c release --package-path native/macos --arch "$sarch" --show-bin-path)
+            else
+              bin_path=$(swift build -c release --package-path native/macos --arch "$sarch" --show-bin-path)
+            fi
+
+            echo "==> Swift bin path: ${bin_path}"
+
+            pkg_dir="package-${arch}"
+            rm -rf "$pkg_dir"
+            mkdir -p "$pkg_dir"
+            cp README.md LICENSE "$pkg_dir"/
+            cp "${bin_path}/clip2agent-macos" "$pkg_dir"/
+            cp "${bin_path}/clip2agent-hotkey" "$pkg_dir"/
+
+            asset="clip2agent_${version}_darwin_${arch}_helpers.tar.gz"
+            tar -C "$pkg_dir" -czf "dist/${asset}" .
+          }
+
+          build_one arm64 arm64 ""
+          build_one amd64 x86_64 "arch -x86_64"
+
+      - name: Upload helper assets
         uses: actions/upload-artifact@v4
         with:
-          name: release-swift-helpers-${{ matrix.goarch }}
+          name: release-swift-helpers
           path: dist/*
           if-no-files-found: error
 
