@@ -117,6 +117,31 @@ version_number() {
   fi
 }
 
+pick_asset_from_checksums() {
+  # args: checksums_file kind goos goarch asset_ext
+  # kind: cli|helpers
+  checksums_file="$1"
+  kind="$2"
+  goos="$3"
+  goarch="$4"
+  asset_ext="$5"
+
+  # Pick filename (2nd column) from checksums.txt
+  # - cli:     clip2agent_<version>_<goos>_<goarch>.<tar.gz|zip>
+  # - helpers: clip2agent_<version>_darwin_<goarch>_helpers.tar.gz
+  if [ "$kind" = "helpers" ]; then
+    awk -v goarch="$goarch" '($2 ~ ("^clip2agent_.*_darwin_" goarch "_helpers\\.tar\\.gz$")) {print $2; exit}' "$checksums_file"
+    return 0
+  fi
+
+  if [ "$asset_ext" = "tar.gz" ]; then
+    ext_re="tar\\.gz"
+  else
+    ext_re="zip"
+  fi
+  awk -v goos="$goos" -v goarch="$goarch" -v ext_re="$ext_re" '($2 ~ ("^clip2agent_.*_" goos "_" goarch "\\." ext_re "$")) {print $2; exit}' "$checksums_file"
+}
+
 download() {
   url="$1"
   dest="$2"
@@ -206,6 +231,24 @@ if ! download "$base_url/$checksums_asset" "$tmpdir/$checksums_asset"; then
 
   echo "==> Done"
   exit 0
+fi
+
+# If VERSION=latest, Releases 下载链接仍然是 latest/download/，但 asset 文件名里不包含 "latest"。
+# 因此需要根据 checksums.txt 解析出真实的 asset 名称。
+if [ "$VERSION" = "latest" ]; then
+  picked=$(pick_asset_from_checksums "$tmpdir/$checksums_asset" cli "$goos" "$goarch" "$asset_ext")
+  if [ -z "$picked" ]; then
+    echo "failed to locate cli asset in checksums.txt for ${goos}/${goarch}" >&2
+    exit 1
+  fi
+  cli_asset="$picked"
+
+  if [ "$INSTALL_MACOS_HELPERS" = "true" ]; then
+    picked_helpers=$(pick_asset_from_checksums "$tmpdir/$checksums_asset" helpers "$goos" "$goarch" "$asset_ext")
+    if [ -n "$picked_helpers" ]; then
+      helpers_asset="$picked_helpers"
+    fi
+  fi
 fi
 
 download "$base_url/$cli_asset" "$tmpdir/$cli_asset"

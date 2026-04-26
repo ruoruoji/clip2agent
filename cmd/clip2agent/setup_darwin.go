@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ruoruoji/clip2agent/internal/diagnostics"
 	"github.com/ruoruoji/clip2agent/internal/errs"
@@ -67,6 +68,16 @@ func runSetup(ctx context.Context, args []string) int {
 		return 0
 	}
 
+	steps := 4 // repo/构建产物/配置
+	if install {
+		steps++ // 拷贝安装
+	}
+	if withHotkey && withLaunchd {
+		steps++ // launchd
+	}
+	pr := newSetupProgress(os.Stderr, steps)
+
+	pr.Step("定位仓库路径")
 	root, err := findRepoRootForSetup()
 	if err != nil {
 		errs.Fprint(os.Stderr, err)
@@ -76,14 +87,32 @@ func runSetup(ctx context.Context, args []string) int {
 	macDir := filepath.Join(root, "native", "macos")
 
 	// 找到构建产物（优先复用已有 .build，避免在资源受限环境下编译失败）。
+	pr.Step("检查/构建 macOS helper")
 	helperBuilt, err := findSwiftBuildProduct(macDir, "clip2agent-macos")
 	needBuild := rebuild || err != nil
 	if needBuild {
+		fmt.Fprintln(os.Stderr, "==> Swift 构建中（可能需要几分钟）...")
+		tickDone := make(chan struct{})
+		go func() {
+			start := time.Now()
+			t := time.NewTicker(8 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					fmt.Fprintf(os.Stderr, "==> Swift 构建中... %s\n", time.Since(start).Truncate(time.Second))
+				case <-tickDone:
+					return
+				}
+			}
+		}()
 		if err := runSwiftBuild(ctx, macDir); err != nil {
+			close(tickDone)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		close(tickDone)
 		helperBuilt, err = findSwiftBuildProduct(macDir, "clip2agent-macos")
 	}
 	if err != nil {
@@ -94,6 +123,7 @@ func runSetup(ctx context.Context, args []string) int {
 
 	var hotkeyBuilt string
 	if withHotkey {
+		pr.Note("检查/构建 hotkey helper")
 		hotkeyBuilt, err = findSwiftBuildProduct(macDir, "clip2agent-hotkey")
 		if err != nil && needBuild {
 			errs.Fprint(os.Stderr, err)
@@ -101,11 +131,28 @@ func runSetup(ctx context.Context, args []string) int {
 			return 1
 		}
 		if err != nil {
+			fmt.Fprintln(os.Stderr, "==> Swift 构建中（可能需要几分钟）...")
+			tickDone := make(chan struct{})
+			go func() {
+				start := time.Now()
+				t := time.NewTicker(8 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-t.C:
+						fmt.Fprintf(os.Stderr, "==> Swift 构建中... %s\n", time.Since(start).Truncate(time.Second))
+					case <-tickDone:
+						return
+					}
+				}
+			}()
 			if err := runSwiftBuild(ctx, macDir); err != nil {
+				close(tickDone)
 				errs.Fprint(os.Stderr, err)
 				fmt.Fprintln(os.Stderr)
 				return 1
 			}
+			close(tickDone)
 			hotkeyBuilt, err = findSwiftBuildProduct(macDir, "clip2agent-hotkey")
 		}
 		if err != nil {
@@ -116,6 +163,7 @@ func runSetup(ctx context.Context, args []string) int {
 	}
 
 	// 初始化配置
+	pr.Step("初始化配置")
 	if err := ensureHotkeyConfig(forceConfig); err != nil {
 		errs.Fprint(os.Stderr, err)
 		fmt.Fprintln(os.Stderr)
@@ -128,6 +176,7 @@ func runSetup(ctx context.Context, args []string) int {
 	helperDst := filepath.Join(binDir, "clip2agent-macos")
 	hotkeyDst := filepath.Join(binDir, "clip2agent-hotkey")
 	if install {
+		pr.Step("安装到 bin-dir")
 		if err := os.MkdirAll(binDir, 0o755); err != nil {
 			errs.Fprint(os.Stderr, errs.WrapCode("E007", "创建 bin-dir 失败", err))
 			fmt.Fprintln(os.Stderr)
@@ -151,6 +200,7 @@ func runSetup(ctx context.Context, args []string) int {
 	}
 
 	if withHotkey && withLaunchd {
+		pr.Step("安装并启动 LaunchAgent")
 		clipPath := clip2agentDst
 		if !install {
 			clipPath = selfExe
@@ -169,6 +219,7 @@ func runSetup(ctx context.Context, args []string) int {
 			return 1
 		}
 	}
+	pr.Done()
 
 	fmt.Printf("ok: config=%s\n", paths.HotkeyConfigPath())
 	if install {
@@ -392,4 +443,66 @@ func xmlEscape(s string) string {
 	s = strings.ReplaceAll(s, "\"", "&quot;")
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
+}
+
+type setupProgress struct {
+	w     io.Writer
+	total int
+	cur   int
+}
+
+func newSetupProgress(w io.Writer, total int) *setupProgress {
+	if total <= 0 {
+		total = 1
+	}
+	return &setupProgress{w: w, total: total}
+}
+
+func (p *setupProgress) Step(msg string) {
+	if p == nil {
+		return
+	}
+	p.cur++
+	if p.cur > p.total {
+		p.total = p.cur
+	}
+	percent := int(float64(p.cur) / float64(p.total) * 100)
+	bar := renderBar(percent, 20)
+	fmt.Fprintf(p.w, "==> [%s] %d/%d %s\n", bar, p.cur, p.total, msg)
+}
+
+func (p *setupProgress) Note(msg string) {
+	if p == nil {
+		return
+	}
+	fmt.Fprintf(p.w, "==> %s\n", msg)
+}
+
+func (p *setupProgress) Done() {
+	if p == nil {
+		return
+	}
+	if p.cur < p.total {
+		p.cur = p.total
+		percent := int(float64(p.cur) / float64(p.total) * 100)
+		bar := renderBar(percent, 20)
+		fmt.Fprintf(p.w, "==> [%s] %d/%d 完成\n", bar, p.cur, p.total)
+	}
+}
+
+func renderBar(percent int, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	if width <= 0 {
+		width = 10
+	}
+	filled := percent * width / 100
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("=", filled) + strings.Repeat(" ", width-filled)
 }

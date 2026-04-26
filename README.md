@@ -17,6 +17,49 @@
 
 `clip2agent` 把这条链路统一成：**读取剪贴板图片 → 规范化 → 输出路径 / Base64 / Data URI / OCR 文本 → 可选写回剪贴板**。
 
+## 快速开始
+
+### 1. 安装
+
+macOS / Linux（优先走 Releases；如果仓库还没有 Release，会 fallback 到 `go install`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh
+```
+
+或使用 Go 安装：
+
+```bash
+go install github.com/ruoruoji/clip2agent/cmd/clip2agent@latest
+```
+
+### 2. 环境检查
+
+```bash
+clip2agent doctor
+clip2agent inspect
+
+# macOS（热键/菜单栏工作流）只读检查：
+clip2agent setup --verify
+clip2agent setup --verify --json
+```
+
+### 3. 快捷键工作流
+
+macOS（构建/安装 helper + 初始化配置 + 可选安装 LaunchAgent）：
+
+```bash
+clip2agent setup
+clip2agent hotkey status
+```
+
+Linux：
+
+- X11：`clip2agent hotkey install`（依赖 `xbindkeys`）
+- Wayland：建议把 `clip2agent hotkey trigger --id 1` 绑定到桌面环境快捷键
+
+Windows：`clip2agent hotkey run`
+
 ## 特性
 
 - 支持多种输出模式：`path`、`base64`、`data-uri`、`ocr`、`hybrid`
@@ -120,7 +163,7 @@ macOS 如需 helper：
 swift build -c release --package-path native/macos
 ```
 
-## 快速开始
+## 常见用法
 
 ### 先做环境检查
 
