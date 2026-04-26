@@ -1,0 +1,18 @@
+.idea/
+*.iml
+.DS_Store
+
+# Go
+/bin/
+/dist/
+/clip2agent
+*.exe
+*.test
+*.out
+
+# Logs
+*.log
+
+# SwiftPM
+native/macos/.build/
+native/macos/.swiftpm/

@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify release inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run Go tests
+        run: go test ./...
+
+  build-go:
+    name: Build Go binaries (${{ matrix.goos }}-${{ matrix.goarch }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - runner: ubuntu-latest
+            goos: windows
+            goarch: amd64
+            ext: .exe
+            archive: zip
+          - runner: ubuntu-latest
+            goos: windows
+            goarch: arm64
+            ext: .exe
+            archive: zip
+          - runner: macos-13
+            goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - runner: macos-14
+            goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BIN_EXT: ${{ matrix.ext }}
+          ARCHIVE: ${{ matrix.archive }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist package
+          binary="clip2agent${BIN_EXT}"
+          version="${VERSION#v}"
+          asset="clip2agent_${version}_${GOOS}_${GOARCH}.${ARCHIVE}"
+
+          go build -trimpath -ldflags="-s -w" -o "dist/${binary}" ./cmd/clip2agent
+
+          cp README.md LICENSE package/
+          cp "dist/${binary}" package/
+
+          if [ "${ARCHIVE}" = "zip" ]; then
+            (cd package && zip -q -r "../dist/${asset}" .)
+          else
+            tar -C package -czf "dist/${asset}" .
+          fi
+
+          rm "dist/${binary}"
+
+      - name: Upload packaged asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-go-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  build-swift-helpers:
+    name: Build macOS helpers (${{ matrix.goarch }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            goarch: amd64
+          - runner: macos-14
+            goarch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Swift helpers
+        run: swift build -c release --package-path native/macos
+
+      - name: Package Swift helpers
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist package
+          version="${VERSION#v}"
+          asset="clip2agent_${version}_darwin_${GOARCH}_helpers.tar.gz"
+          cp README.md LICENSE package/
+          cp native/macos/.build/release/clip2agent-macos package/
+          cp native/macos/.build/release/clip2agent-hotkey package/
+          tar -C package -czf "dist/${asset}" .
+
+      - name: Upload helper asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-swift-helpers-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - build-go
+      - build-swift-helpers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Add installer script
+        run: cp scripts/install.sh release-assets/install.sh
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*
