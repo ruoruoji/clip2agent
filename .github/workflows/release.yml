@@ -64,12 +64,13 @@ jobs:
             goarch: arm64
             ext: .exe
             archive: zip
-          - runner: macos-13
+          # Go 的 darwin 产物可在 Linux runner 交叉编译，避免 macOS runner 队列阻塞。
+          - runner: ubuntu-latest
             goos: darwin
             goarch: amd64
             ext: ""
             archive: tar.gz
-          - runner: macos-14
+          - runner: ubuntu-latest
             goos: darwin
             goarch: arm64
             ext: ""
