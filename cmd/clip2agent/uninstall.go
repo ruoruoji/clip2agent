@@ -148,7 +148,7 @@ func runUninstall(ctx context.Context, args []string) int {
 	fs.SetOutput(os.Stderr)
 	var op uninstallOptions
 	fs.StringVar(&op.binDir, "bin-dir", "", "二进制所在目录（默认取当前可执行文件目录）")
-	fs.BoolVar(&op.dryRun, "dry-run", false, "只打印将执行的动作，不实际删除")
+	fs.BoolVar(&op.dryRun, "dry-run", false, "只打印将执行的动作，不实际删除；适合先预览本地开发重置的清理范围")
 	fs.BoolVar(&op.verbose, "verbose", false, "输出每项处理结果")
 
 	fs.BoolVar(&op.yes, "yes", false, "跳过危险操作确认（用于脚本）")
@@ -158,7 +158,7 @@ func runUninstall(ctx context.Context, args []string) int {
 	fs.BoolVar(&op.noBin, "no-bin", false, "不删除 bin-dir 下二进制")
 	fs.BoolVar(&op.noConfig, "no-config", false, "不删除 hotkey 配置（hotkey.json）")
 	fs.BoolVar(&op.noTemp, "no-temp", false, "不删除默认临时目录（os.TempDir()/clip2agent）")
-	fs.BoolVar(&op.noLogs, "no-logs", false, "不删除 hotkey 日志（macOS）")
+	fs.BoolVar(&op.noLogs, "no-logs", false, "不删除运行日志（CLI / hotkey）")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -213,6 +213,7 @@ func runUninstall(ctx context.Context, args []string) int {
 	}
 
 	if op.dryRun {
+		printUninstallNextSteps(op, true)
 		return 0
 	}
 	if log.failed {
@@ -221,7 +222,43 @@ func runUninstall(ctx context.Context, args []string) int {
 	if !op.verbose {
 		fmt.Println("ok")
 	}
+	printUninstallNextSteps(op, false)
 	return 0
+}
+
+func printUninstallNextSteps(op uninstallOptions, dryRun bool) {
+	if dryRun {
+		fmt.Println("next:")
+		fmt.Println("- 确认上面的清理范围符合预期")
+		if op.purge {
+			fmt.Println("- 当前命令已覆盖本地开发重置所需的彻底清理范围")
+		} else {
+			fmt.Println("- 需要做本地开发重置时，运行: clip2agent uninstall --purge --yes")
+			fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent uninstall --purge --yes")
+		}
+		fmt.Println("- 实际清理完成后运行: clip2agent doctor")
+		fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent doctor")
+		if runtime.GOOS == "darwin" {
+			fmt.Println("- macOS 重新安装后验证: clip2agent setup && clip2agent setup --verify")
+			fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent setup && go run ./cmd/clip2agent setup --verify")
+		}
+		return
+	}
+
+	fmt.Println("next:")
+	if op.purge {
+		fmt.Println("- 已完成本地开发重置的清理阶段")
+	} else {
+		fmt.Println("- 如需彻底清理当前环境，再运行: clip2agent uninstall --purge --yes")
+		fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent uninstall --purge --yes")
+	}
+	fmt.Println("- 清理后检查环境: clip2agent doctor")
+	fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent doctor")
+	if runtime.GOOS == "darwin" {
+		fmt.Println("- macOS 重新 setup: clip2agent setup")
+		fmt.Println("- 安装后验证: clip2agent setup --verify")
+		fmt.Println("- 若在仓库中开发，也可运行: go run ./cmd/clip2agent setup && go run ./cmd/clip2agent setup --verify")
+	}
 }
 
 func defaultUninstallBinDir() string {

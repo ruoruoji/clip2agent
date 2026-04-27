@@ -2,7 +2,12 @@
 
 package main
 
-import "context"
+import (
+	"context"
+	"strings"
+
+	"github.com/ruoruoji/clip2agent/internal/paths"
+)
 
 func uninstallPlatformHotkey(_ context.Context, _ uninstallOptions, log *uninstallLogger) {
 	// 与 `clip2agent hotkey uninstall` 对齐：只删除 xbindkeys/autostart 文件。
@@ -10,6 +15,8 @@ func uninstallPlatformHotkey(_ context.Context, _ uninstallOptions, log *uninsta
 	log.removeFile(linuxAutostartDesktopPath(), "删除 autostart desktop")
 }
 
-func uninstallPlatformLogs(_ context.Context, _ uninstallOptions, _ *uninstallLogger) {
-	// Linux 无固定日志文件约定。
+func uninstallPlatformLogs(_ context.Context, _ uninstallOptions, log *uninstallLogger) {
+	if p := strings.TrimSpace(paths.LogPath()); p != "" {
+		log.removeFile(p, "删除日志")
+	}
 }

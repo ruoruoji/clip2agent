@@ -173,6 +173,38 @@ type SetupVerifyReport struct {
 	Error         *ErrorJSON        `json:"error,omitempty"`
 }
 
+func appendUniqueStrings(dst []string, vals ...string) []string {
+	seen := make(map[string]struct{}, len(dst))
+	for _, v := range dst {
+		seen[v] = struct{}{}
+	}
+	for _, v := range vals {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		dst = append(dst, v)
+		seen[v] = struct{}{}
+	}
+	return dst
+}
+
+func addDarwinResetAdvice(fix *[]string, next *[]string) {
+	*fix = appendUniqueStrings(*fix,
+		"若当前是本地开发中的脏环境/残留态，先运行: clip2agent uninstall --purge --yes",
+		"清理后运行: clip2agent doctor",
+		"重新安装后运行: clip2agent setup",
+	)
+	*next = appendUniqueStrings(*next,
+		"clip2agent uninstall --purge --yes",
+		"clip2agent doctor",
+		"clip2agent setup",
+		"clip2agent setup --verify",
+	)
+}
+
 func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyReport {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
@@ -231,6 +263,7 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 				rep.Checks["macos_helper_from_env"] = false
 				rep.Notes = append(rep.Notes, "CLIP2AGENT_MACOS_HELPER 指向的文件不存在")
 				rep.Fix = append(rep.Fix, "运行: clip2agent setup")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			}
 		}
 		if !helperOK {
@@ -244,7 +277,9 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 		}
 		if !helperOK {
 			rep.Missing = append(rep.Missing, "clip2agent-macos")
+			rep.Notes = append(rep.Notes, "`setup --verify` 面向安装后验证；若你刚完成清理，这是待重装状态")
 			rep.Fix = append(rep.Fix, "运行: clip2agent setup")
+			addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			rep.Error = errToJSON(errs.E("E003", "缺少 macOS 剪贴板 helper（clip2agent-macos）"))
 			return rep
 		}
@@ -262,6 +297,7 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 				rep.Checks["hotkey_config_valid"] = false
 				rep.Notes = append(rep.Notes, "hotkey.json 配置不可用")
 				rep.Fix = append(rep.Fix, "运行: clip2agent config init --force")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			} else {
 				rep.Checks["hotkey_config_valid"] = true
 				// 额外检查：至少有一条 enabled=true
@@ -278,6 +314,7 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 			rep.Checks["hotkey_config_exists"] = false
 			rep.Notes = append(rep.Notes, "hotkey.json 未生成")
 			rep.Fix = append(rep.Fix, "运行: clip2agent config init")
+			addDarwinResetAdvice(&rep.Fix, &rep.Next)
 		}
 	}
 
@@ -295,6 +332,7 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 			if !ok {
 				rep.Notes = append(rep.Notes, "hotkey service not running")
 				rep.Fix = append(rep.Fix, "运行: clip2agent hotkey restart")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 				if hint != "" {
 					rep.Paths["launchctl_print"] = hint
 				}
@@ -302,11 +340,12 @@ func SetupVerifyJSON(ctx context.Context, opt SetupVerifyOptions) SetupVerifyRep
 			if !rep.Checks["hotkey_launchagent_installed"] {
 				rep.Notes = append(rep.Notes, "hotkey LaunchAgent not installed")
 				rep.Fix = append(rep.Fix, "运行: clip2agent hotkey install")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			}
 		}
 	}
 
-	rep.Next = append(rep.Next, "clip2agent doctor", "clip2agent hotkey doctor")
+	rep.Next = appendUniqueStrings(rep.Next, "clip2agent doctor", "clip2agent hotkey doctor")
 	return rep
 }
 
@@ -380,8 +419,12 @@ func Doctor(ctx context.Context, opt DoctorOptions) DoctorResult {
 	case "darwin":
 		if !lookPathOK("clip2agent-macos") && strings.TrimSpace(os.Getenv("CLIP2AGENT_MACOS_HELPER")) == "" {
 			fmt.Fprintln(&b, "missing: clip2agent-macos")
+			fmt.Fprintln(&b, "note: `setup --verify` 更适合安装后验证；如果你刚完成清理，这是待重装状态")
+			fmt.Fprintln(&b, "fix: 若怀疑当前环境有残留，先运行: clip2agent uninstall --purge --yes")
+			fmt.Fprintln(&b, "fix: 清理后运行: clip2agent doctor")
 			fmt.Fprintln(&b, "fix: clip2agent setup")
 			fmt.Fprintln(&b, "fix: (repo) go run ./cmd/clip2agent setup")
+			fmt.Fprintln(&b, "next: clip2agent setup --verify")
 			return DoctorResult{Text: b.String(), Err: errs.E("E003", "缺少 macOS 剪贴板 helper（clip2agent-macos）")}
 		}
 		fmt.Fprintln(&b, "ok: macOS helper")
@@ -392,18 +435,21 @@ func Doctor(ctx context.Context, opt DoctorOptions) DoctorResult {
 		if _, err := os.Stat(cfgPath); err != nil {
 			fmt.Fprintln(&b, "note: hotkey config missing")
 			fmt.Fprintln(&b, "fix: clip2agent config init")
+			fmt.Fprintln(&b, "fix: 若当前环境有残留，先运行: clip2agent uninstall --purge --yes")
 		} else {
 			if err := validateHotkeyConfig(cfgPath); err != nil {
 				fmt.Fprintln(&b, "note: hotkey config invalid")
 				errs.Fprint(&b, err)
 				fmt.Fprintln(&b)
 				fmt.Fprintln(&b, "fix: clip2agent config init --force")
+				fmt.Fprintln(&b, "fix: 若怀疑是脏环境/残留态，先运行: clip2agent uninstall --purge --yes")
 			}
 		}
 		if plist := paths.HotkeyLaunchAgentPlistPath(); strings.TrimSpace(plist) != "" {
 			if _, err := os.Stat(plist); err != nil {
 				fmt.Fprintln(&b, "note: hotkey LaunchAgent not installed")
 				fmt.Fprintln(&b, "fix: clip2agent hotkey install")
+				fmt.Fprintln(&b, "fix: 若当前环境曾反复安装/卸载，先运行: clip2agent uninstall --purge --yes")
 			} else {
 				uid := os.Getuid()
 				svc := "gui/" + strconv.Itoa(uid) + "/" + paths.HotkeyLaunchAgentLabel
@@ -412,9 +458,12 @@ func Doctor(ctx context.Context, opt DoctorOptions) DoctorResult {
 				} else {
 					fmt.Fprintln(&b, "note: hotkey service not running")
 					fmt.Fprintln(&b, "fix: clip2agent hotkey restart")
+					fmt.Fprintln(&b, "fix: 若怀疑 LaunchAgent 残留，先运行: clip2agent uninstall --purge --yes")
 				}
 			}
 		}
+		fmt.Fprintln(&b, "next: clip2agent inspect")
+		fmt.Fprintln(&b, "next: clip2agent coco --copy")
 		return DoctorResult{Text: b.String(), Err: nil}
 	case "linux":
 		wayland := os.Getenv("WAYLAND_DISPLAY") != ""
@@ -528,6 +577,8 @@ func DoctorJSON(ctx context.Context, opt DoctorOptions) DoctorReport {
 		rep.Paths["hotkey_launchagent"] = paths.HotkeyLaunchAgentPlistPath()
 		if !rep.Checks["macos_helper_in_path"] && !rep.Checks["macos_helper_env"] {
 			rep.Missing = append(rep.Missing, "clip2agent-macos")
+			rep.Notes = append(rep.Notes, "`setup --verify` 更适合安装后验证；如果你刚完成清理，这是待重装状态")
+			addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			rep.Fix = append(rep.Fix, "clip2agent setup", "(repo) go run ./cmd/clip2agent setup")
 			rep.Error = errToJSON(errs.E("E003", "缺少 macOS 剪贴板 helper（clip2agent-macos）"))
 			return rep
@@ -538,12 +589,14 @@ func DoctorJSON(ctx context.Context, opt DoctorOptions) DoctorReport {
 		if _, err := os.Stat(cfgPath); err != nil {
 			rep.Notes = append(rep.Notes, "hotkey config missing")
 			rep.Fix = append(rep.Fix, "clip2agent config init")
+			addDarwinResetAdvice(&rep.Fix, &rep.Next)
 			rep.Checks["hotkey_config_exists"] = false
 		} else {
 			rep.Checks["hotkey_config_exists"] = true
 			if err := validateHotkeyConfig(cfgPath); err != nil {
 				rep.Notes = append(rep.Notes, "hotkey config invalid")
 				rep.Fix = append(rep.Fix, "clip2agent config init --force")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 				rep.Checks["hotkey_config_valid"] = false
 			} else {
 				rep.Checks["hotkey_config_valid"] = true
@@ -553,6 +606,7 @@ func DoctorJSON(ctx context.Context, opt DoctorOptions) DoctorReport {
 			if _, err := os.Stat(rep.Paths["hotkey_launchagent"]); err != nil {
 				rep.Notes = append(rep.Notes, "hotkey LaunchAgent not installed")
 				rep.Fix = append(rep.Fix, "clip2agent hotkey install")
+				addDarwinResetAdvice(&rep.Fix, &rep.Next)
 				rep.Checks["hotkey_launchagent_installed"] = false
 			} else {
 				rep.Checks["hotkey_launchagent_installed"] = true
@@ -562,9 +616,11 @@ func DoctorJSON(ctx context.Context, opt DoctorOptions) DoctorReport {
 				rep.Checks["hotkey_service_running"] = ok
 				if !ok {
 					rep.Fix = append(rep.Fix, "clip2agent hotkey restart")
+					addDarwinResetAdvice(&rep.Fix, &rep.Next)
 				}
 			}
 		}
+		rep.Next = appendUniqueStrings(rep.Next, "clip2agent inspect", "clip2agent coco --copy")
 		return rep
 	case "linux":
 		wayland := os.Getenv("WAYLAND_DISPLAY") != ""

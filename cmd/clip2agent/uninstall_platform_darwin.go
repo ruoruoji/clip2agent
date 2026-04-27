@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/ruoruoji/clip2agent/internal/paths"
@@ -37,11 +36,15 @@ func uninstallPlatformHotkey(ctx context.Context, _ uninstallOptions, log *unins
 }
 
 func uninstallPlatformLogs(_ context.Context, _ uninstallOptions, log *uninstallLogger) {
-	h, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(h) == "" {
+	if _, err := os.UserHomeDir(); err != nil {
 		log.warnf("无法获取 HOME，跳过删除 hotkey 日志")
 		return
 	}
-	logPath := filepath.Join(h, "Library", "Logs", "clip2agent-hotkey.log")
-	log.removeFile(logPath, "删除 hotkey 日志")
+	seen := map[string]bool{}
+	if p := strings.TrimSpace(paths.LogPath()); p != "" {
+		if !seen[p] {
+			seen[p] = true
+			log.removeFile(p, "删除日志")
+		}
+	}
 }

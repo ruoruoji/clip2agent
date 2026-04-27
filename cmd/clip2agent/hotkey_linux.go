@@ -20,7 +20,7 @@ import (
 // - Wayland：不做通用实现（安全模型限制）。
 func runHotkey(ctx context.Context, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "用法: clip2agent hotkey <install|uninstall|status|print|trigger>")
+		fmt.Fprintln(os.Stderr, "用法: clip2agent hotkey <install|uninstall|status|print|trigger|logs|doctor|test>")
 		return 2
 	}
 
@@ -29,6 +29,7 @@ func runHotkey(ctx context.Context, args []string) int {
 	case "doctor":
 		cfgPath := paths.HotkeyConfigPath()
 		fmt.Printf("hotkey_config: %s (exists=%v)\n", cfgPath, fileExists(cfgPath))
+		fmt.Printf("hotkey_log: %s\n", paths.HotkeyLogPath())
 		if _, err := loadHotkeyConfig(); err != nil {
 			errs.Fprint(os.Stderr, errs.E("E006", "hotkey 配置不可用", errs.Hint("运行: clip2agent config init --force"), errs.Cause(err)))
 			fmt.Fprintln(os.Stderr)
@@ -67,11 +68,16 @@ func runHotkey(ctx context.Context, args []string) int {
 			fmt.Fprintln(os.Stderr)
 			return 2
 		}
-		if err := executeActionOnce(ctx, cfg.Bindings[id-1].Action); err != nil {
+		binding := cfg.Bindings[id-1]
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=test binding=%s action=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), hotkeyActionPreview(binding.Action))
+		if err := executeActionOnce(ctx, binding.Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=test binding=%s err=%v", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=test binding=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)))
 		fmt.Println("ok")
 		return 0
 	case "trigger":
@@ -98,13 +104,21 @@ func runHotkey(ctx context.Context, args []string) int {
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		binding := cfg.Bindings[id-1]
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=trigger binding=%s action=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), hotkeyActionPreview(binding.Action))
 		// 直接执行一次（给 xbindkeys 调用）
-		if err := executeActionOnce(ctx, cfg.Bindings[id-1].Action); err != nil {
+		if err := executeActionOnce(ctx, binding.Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=trigger binding=%s err=%v", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=trigger binding=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)))
 		return 0
+
+	case "logs":
+		return runHotkeyLogs(ctx)
 
 	case "print":
 		cfg, err := loadHotkeyConfig()
@@ -192,23 +206,23 @@ func runHotkey(ctx context.Context, args []string) int {
 		return 0
 
 	default:
-		errs.Fprint(os.Stderr, errs.E("E006", "不支持的 hotkey 子命令", errs.Hint("支持: install/uninstall/status/print/trigger/doctor/test")))
+		errs.Fprint(os.Stderr, errs.E("E006", "不支持的 hotkey 子命令", errs.Hint("支持: install/uninstall/status/print/trigger/logs/doctor/test")))
 		fmt.Fprintln(os.Stderr)
 		return 2
 	}
 }
 
-func executeActionOnce(ctx context.Context, action hotkeyAction) error {
+func executeActionOnce(ctx context.Context, action hotkeyAction, traceID string) error {
 	t := strings.ToLower(strings.TrimSpace(action.Type))
 	switch t {
 	case "clip2agent":
 		cmd := resolveClip2AgentCommandPortable(action)
-		return runExternal(ctx, cmd, action.Args, action.Env)
+		return runExternal(ctx, cmd, action.Args, action.Env, traceID, "hotkey")
 	case "exec":
 		if strings.TrimSpace(action.Command) == "" {
 			return nil
 		}
-		return runExternal(ctx, action.Command, action.Args, action.Env)
+		return runExternal(ctx, action.Command, action.Args, action.Env, traceID, "hotkey")
 	default:
 		return errs.E("E006", "不支持的 hotkey action.type", errs.Hint("支持: clip2agent/exec"))
 	}

@@ -17,48 +17,21 @@
 
 `clip2agent` 把这条链路统一成：**读取剪贴板图片 → 规范化 → 输出路径 / Base64 / Data URI / OCR 文本 → 可选写回剪贴板**。
 
+说明：下文示例默认你已安装并可直接运行 `clip2agent`；如果你在仓库里源码态运行，请替换为 `go run ./cmd/clip2agent ...`。
+
 ## 快速开始
 
-### 1. 安装
-
-macOS / Linux（优先走 Releases；如果仓库还没有 Release，会 fallback 到 `go install`）：
+macOS / Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh
 ```
 
-或使用 Go 安装：
-
-```bash
-go install github.com/ruoruoji/clip2agent/cmd/clip2agent@latest
-```
-
-### 2. 环境检查
-
-```bash
-clip2agent doctor
-clip2agent inspect
-
-# macOS（热键/菜单栏工作流）只读检查：
-clip2agent setup --verify
-clip2agent setup --verify --json
-```
-
-### 3. 快捷键工作流
-
-macOS（构建/安装 helper + 初始化配置 + 可选安装 LaunchAgent）：
+macOS 想启用菜单栏 / 全局热键工作流：
 
 ```bash
 clip2agent setup
-clip2agent hotkey status
 ```
-
-Linux：
-
-- X11：`clip2agent hotkey install`（依赖 `xbindkeys`）
-- Wayland：建议把 `clip2agent hotkey trigger --id 1` 绑定到桌面环境快捷键
-
-Windows：`clip2agent hotkey run`
 
 ## 特性
 
@@ -90,11 +63,7 @@ Windows：`clip2agent hotkey run`
 
 ### 方式一：一键安装脚本（macOS / Linux）
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh
-```
-
-说明：该脚本优先从 GitHub Releases 拉取预编译产物；如果仓库还没有发布 Release，会自动 fallback 到 `go install`（fallback 模式仅安装 `clip2agent`，不会安装 macOS helpers）。
+`curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh`
 
 常用参数：
 
@@ -117,24 +86,12 @@ curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/in
 ```bash
 clip2agent uninstall
 
-# 仅查看将执行的动作（不实际删除）
-clip2agent uninstall --dry-run
 
 # 彻底清理（会删除 kept-dir，可能包含你保留的图片；需要显式确认）
 clip2agent uninstall --purge --yes
 ```
 
-如果你是通过脚本安装的，也可以用脚本卸载（macOS / Linux）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | sh
-
-# dry-run
-curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | DRY_RUN=true sh
-
-# purge（危险：删除 kept-dir）
-curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/uninstall.sh | PURGE=true YES=true sh
-```
+如果你是在仓库里做本地开发，且需要“清理现有环境后重新 setup / 安装”，推荐直接走后面的“本地开发重置（清理后重装）”流程；源码态下更推荐直接用 `go run ./cmd/clip2agent ...` 执行这些命令。
 
 ### 方式二：从 GitHub Releases 下载
 
@@ -145,37 +102,19 @@ curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/un
 - `clip2agent_<version>_darwin_amd64_helpers.tar.gz`
 - `clip2agent_<version>_darwin_arm64_helpers.tar.gz`
 
-### 方式三：使用 `go install`
+### 方式三：源码态运行（开发用）
 
 ```bash
-go install github.com/ruoruoji/clip2agent/cmd/clip2agent@latest
+# 直接运行 CLI（推荐）
+go run ./cmd/clip2agent <cmd>
+
+# macOS 热键工作流一键安装（会安装 helper + hotkey + LaunchAgent + 初始化配置）
+go run ./cmd/clip2agent setup
 ```
 
-### 方式四：从源码构建
-
-```bash
-go build -o clip2agent ./cmd/clip2agent
-```
-
-macOS 如需 helper：
-
-```bash
-swift build -c release --package-path native/macos
-```
+开发者如需单独构建 helper（`clip2agent-macos` / `clip2agent-hotkey`）：`swift build -c release --package-path native/macos`
 
 ## 常见用法
-
-### 先做环境检查
-
-```bash
-clip2agent doctor
-clip2agent inspect
-
-# macOS（热键/菜单栏工作流）可先做只读检查：
-clip2agent setup --verify
-# 需要结构化结果时：
-clip2agent setup --verify --json
-```
 
 ### 最常见用法
 
@@ -293,7 +232,19 @@ clip2agent uninstall
 - `clip2agent hotkey uninstall` 仅卸载热键服务（LaunchAgent + plist），不会删除二进制/配置/临时文件
 - 需要“彻底移除”时用 `clip2agent uninstall`（可选 `--purge --yes`）
 
-如果启用了自动粘贴，需要授予系统“辅助功能”权限（配置项：`action.post.paste.enabled=true`，可选 `delay_ms`）。
+日志与输出：
+
+- macOS（菜单栏/LaunchAgent，`clip2agent-hotkey`）：日志写到 `~/Library/Logs/clip2agent.log`，可用 `clip2agent hotkey logs` 跟踪
+- macOS CLI（`clip2agent ...` / `go run ./cmd/clip2agent ...` / `./clip2agent ...`）：每次执行也会追加到同一个 `~/Library/Logs/clip2agent.log`（行前缀为 `[clip2agent-cli]`）
+- Linux hotkey：日志写到 `${XDG_STATE_HOME:-~/.local/state}/clip2agent/clip2agent.log`，可用 `clip2agent hotkey logs` 跟踪
+- CLI 排障时仍建议把 `stdout/stderr` 一并留存
+  - macOS/Linux：`clip2agent doctor --json > c2a-doctor.json 2> c2a-stderr.log`
+  - Windows PowerShell：`clip2agent doctor --json *> c2a-doctor.log`
+- Windows 热键：日志写到 `%LocalAppData%\clip2agent\clip2agent.log`，可用 `clip2agent hotkey logs` 跟踪；`clip2agent hotkey run` 仍会前台常驻
+
+默认启用自动粘贴：需要授予系统“辅助功能”权限（配置项：`action.post.paste.enabled=true`，可选 `delay_ms`；如需关闭把 `enabled` 设为 `false`）。
+
+提示：如果你在系统设置里“已经勾选了”，但菜单栏仍显示“未授权”，通常是授权到了旧路径/另一个版本。请在菜单栏 `C2A` 中查看“当前热键进程：<路径>”，或点击“复制当前热键进程路径（用于授权）”，然后在系统设置里按该路径对应的条目重新勾选。
 
 ### Linux
 
@@ -315,6 +266,91 @@ clip2agent hotkey status
 clip2agent config init
 clip2agent hotkey run
 ```
+
+## 异常排查（日志 / 诊断快照 / 工件）
+
+说明：如果你处于“源码态”（仓库里本地开发），且 `clip2agent` 二进制不在 `PATH`，可以把下文的 `clip2agent` 替换为 `go run ./cmd/clip2agent`。
+
+### 1) 一键采集诊断快照（建议贴 Issue）
+
+通用（所有平台）：
+
+```bash
+clip2agent inspect --json
+clip2agent doctor --json
+```
+
+macOS（热键/菜单栏链路）：
+
+```bash
+clip2agent setup --verify --json
+clip2agent hotkey doctor
+```
+
+建议把输出与报错一起留存：
+
+- macOS/Linux：`clip2agent doctor --json > c2a-doctor.json 2> c2a-doctor.stderr.log`
+- Windows PowerShell：`clip2agent doctor --json *> c2a-doctor.log`
+
+### 2) 安装 / 卸载 / 构建日志怎么拿
+
+安装脚本（macOS / Linux）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ruoruoji/clip2agent/main/scripts/install.sh | sh -x 2>&1 | tee c2a-install.log
+```
+
+macOS `setup`（构建/安装 helper + hotkey + LaunchAgent）：
+
+```bash
+clip2agent setup 2>&1 | tee c2a-setup.log
+
+# 如需更详细的 Swift 构建输出
+swift build -c release --package-path native/macos -v 2>&1 | tee c2a-swift-build.log
+```
+
+卸载（先预览再执行，便于定位“残留/删了什么”）：
+
+```bash
+clip2agent uninstall --dry-run --verbose 2>&1 | tee c2a-uninstall-plan.log
+
+# 彻底清理（危险：会删除 kept-dir，可能包含你保留的图片）
+clip2agent uninstall --purge --yes 2>&1 | tee c2a-uninstall.log
+```
+
+### 3) 配置与工件路径（需要提供哪些文件）
+
+- hotkey 配置：`clip2agent config path`（通常为 `~/.config/clip2agent/hotkey.json`；或 `$XDG_CONFIG_HOME/clip2agent/hotkey.json`）
+- macOS LaunchAgent plist：`~/Library/LaunchAgents/dev.clip2agent-hotkey.plist`
+- 统一日志文件：
+  - macOS：`~/Library/Logs/clip2agent.log`
+  - Linux：`${XDG_STATE_HOME:-~/.local/state}/clip2agent/clip2agent.log`
+  - Windows：`%LocalAppData%\clip2agent\clip2agent.log`
+- Linux X11（xbindkeys）：`~/.config/clip2agent/xbindkeys.conf` 与 `~/.config/autostart/clip2agent-xbindkeys.desktop`（若设置 `XDG_CONFIG_HOME` 则以其为准）
+- 临时目录（默认）：`$TMPDIR/clip2agent`（由系统决定，CLI 可用 `--temp-dir` 覆盖）
+- kept-dir（默认）：用户 cache 目录下的 `clip2agent/kept`（例如 macOS 常见为 `~/Library/Caches/clip2agent/kept`）
+
+### 4) 外部依赖与 provider 选择（为什么这台机子不工作）
+
+- Linux Wayland：依赖 `wl-paste` / `wl-copy`（通常来自 `wl-clipboard`）；可用 `clip2agent inspect` 看是否探测到
+- Linux X11：依赖 `xclip` 或 `xsel`；热键额外依赖 `xbindkeys`
+- Windows：依赖 `powershell.exe` 或 `pwsh.exe`
+- macOS：依赖 `clip2agent-macos` helper（`setup` 会安装）；可用 `clip2agent inspect` 查看是否可用
+- 热键相关常见问题见：[常见问题（FAQ）](#常见问题faq)。
+
+### 5) 临时文件 / kept-dir / GC 生命周期（文件去哪了）
+
+- 默认每次运行会按 `--ttl` 做临时目录清理；可用 `--ttl` 调整清理窗口
+- `--keep-file` 会把文件保留为“持久化”，并跳过自动 GC，适合需要长期引用图片的场景
+- `clip2agent gc` 用于手动清理临时目录；若要清理 kept-dir 需要显式指定 `--temp-dir <kept-dir>` 且加 `--force`
+- “找不到文件/文件被删”问题优先核对：是否启用了 `--keep-file`、`--ttl`，以及是否使用了自定义 `--temp-dir`
+
+### 6) 权限与系统日志（可选）
+
+- macOS 自动粘贴需要“辅助功能”权限（只影响热键工作流的“自动粘贴”，不影响 CLI 读剪贴板）
+- macOS LaunchAgent 排查：`clip2agent hotkey status` / `clip2agent hotkey doctor`；必要时可用 `launchctl print gui/$(id -u)/dev.clip2agent-hotkey`
+- macOS 崩溃日志（按需提供）：`~/Library/Logs/DiagnosticReports/`（或用 Console.app 搜索 `clip2agent`）
+- Windows 崩溃/异常（按需提供）：事件查看器（Event Viewer）→ Windows 日志 → 应用程序
 
 ## 依赖说明
 
@@ -355,6 +391,12 @@ clip2agent doctor --json
 
 ## 开发
 
+开发者安装 CLI（可选）：
+
+```bash
+go install github.com/ruoruoji/clip2agent/cmd/clip2agent@latest
+```
+
 ```bash
 gofmt -w ./cmd ./internal
 go vet ./...
@@ -362,6 +404,41 @@ go test ./...
 go build ./cmd/clip2agent
 swift build -c release --package-path native/macos
 ```
+
+### 本地开发重置（清理后重装）
+
+当你遇到以下情况时，建议走一次完整重置流程：
+
+- `setup` / `hotkey` 反复安装卸载后状态不一致
+- `LaunchAgent`、helper、配置文件看起来有残留
+- 你想从源码环境重新开始验证安装链路
+
+推荐顺序：
+
+```bash
+# 1) 先预览将删除什么
+go run ./cmd/clip2agent uninstall --dry-run --verbose
+
+# 2) 确认后执行彻底清理
+go run ./cmd/clip2agent uninstall --purge --yes
+
+# 3) 清理后先看当前环境是否还有残留
+go run ./cmd/clip2agent doctor
+
+# 4) 重新 setup / 安装
+go run ./cmd/clip2agent setup
+
+# 5) 安装后做闭环验证
+go run ./cmd/clip2agent setup --verify
+go run ./cmd/clip2agent doctor
+```
+
+说明：
+
+- `clip2agent uninstall --purge --yes` 是本地开发重置的标准清理入口；源码开发场景下，推荐通过 `go run ./cmd/clip2agent uninstall --purge --yes` 调用；它会删除二进制、`hotkey.json`、默认临时目录，以及 macOS 上的 `LaunchAgent` / 日志；`--purge` 还会删除 kept-dir
+- `clip2agent doctor` 更适合“清理后”检查残留；`clip2agent setup --verify` 更适合“安装后”检查结果
+- `clip2agent gc --force` 只作为补充清理：当你曾使用自定义 `temp-dir` / kept-dir，或需要额外回收临时文件时再执行
+- 清理后如果安装态二进制已经被删掉，继续使用仓库内入口，例如 `go run ./cmd/clip2agent setup`、`go run ./cmd/clip2agent doctor`
 
 更多协作约定见 `CONTRIBUTING.md`。
 
@@ -392,6 +469,25 @@ git push origin v0.1.0
 - OCR 与图片处理可能产生临时文件，建议在敏感环境中结合 `doctor`、`gc` 与权限设置一起使用
 
 漏洞披露方式见 `SECURITY.md`。
+
+## 常见问题（FAQ）
+
+### 安装成功但提示 command not found
+
+- 确认你的 `PATH` 里包含安装目录（默认 `~/.local/bin`）。
+  - 可执行：`echo "$PATH" | tr ':' '\n' | grep -n "\.local/bin"`
+  - 临时验证：`~/.local/bin/clip2agent --help`
+
+### goenv / pyenv shim 抢占命令
+
+- 可能会出现 shim 抢占命令（例如报 `goenv: 'clip2agent' command not found`）。
+  - 处理方式：确保 `~/.local/bin` 在 `.goenv/shims` 之前，或删除失效 shim：`rm -f ~/.goenv/shims/clip2agent`
+
+### macOS 热键提示 command not found（LaunchAgent PATH 不同）
+
+- `LaunchAgent` 的 `PATH` 与你终端里的 `PATH` 可能不同。
+  - 用 `clip2agent hotkey doctor` 查看服务状态与 LaunchAgent `PATH` 建议
+  - 若要固定使用某个二进制路径，可在热键配置里显式指定，或通过 `CLIP2AGENT_BIN` 指向 `clip2agent`
 
 ## 路线图
 

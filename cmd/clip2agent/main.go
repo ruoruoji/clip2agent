@@ -24,7 +24,10 @@ import (
 )
 
 func main() {
-	os.Exit(run())
+	start := time.Now()
+	exitCode := run()
+	appendCLIInvocationLog(exitCode, start)
+	os.Exit(exitCode)
 }
 
 func run() int {
@@ -80,6 +83,76 @@ func run() int {
 		fmt.Fprintln(os.Stderr)
 		return 2
 	}
+}
+
+type cliInvocationLog struct {
+	Timestamp string   `json:"timestamp"`
+	Kind      string   `json:"kind"`
+	TraceID   string   `json:"trace_id,omitempty"`
+	Invoker   string   `json:"invoker,omitempty"`
+	Command   string   `json:"command"`
+	Result    string   `json:"result"`
+	ExitCode  int      `json:"exit_code"`
+	DurationMs int64   `json:"duration_ms,omitempty"`
+	Args      []string `json:"args"`
+	Cwd       string   `json:"cwd,omitempty"`
+	Exe       string   `json:"exe,omitempty"`
+}
+
+func appendCLIInvocationLog(exitCode int, start time.Time) {
+	logPath := strings.TrimSpace(paths.CLILogPath())
+	if logPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return
+	}
+	result := "success"
+	if exitCode != 0 {
+		result = "failure"
+	}
+	exe, _ := os.Executable()
+	cwd, _ := os.Getwd()
+	traceID := strings.TrimSpace(os.Getenv("CLIP2AGENT_TRACE_ID"))
+	invoker := strings.TrimSpace(os.Getenv("CLIP2AGENT_INVOKER"))
+	rec := cliInvocationLog{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Kind:      "cli",
+		TraceID:   traceID,
+		Invoker:   invoker,
+		Command:   invocationCommandName(os.Args),
+		Result:    result,
+		ExitCode:  exitCode,
+		DurationMs: time.Since(start).Milliseconds(),
+		Args:      append([]string(nil), os.Args...),
+		Cwd:       strings.TrimSpace(cwd),
+		Exe:       strings.TrimSpace(exe),
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	// 统一日志文件会混入 hotkey 的纯文本行，因此这里也用带前缀的单行日志，便于 tail 排查。
+	_, _ = fmt.Fprintf(f, "[clip2agent-cli] %s %s\n", rec.Timestamp, string(b))
+}
+
+func invocationCommandName(argv []string) string {
+	if len(argv) < 2 {
+		return "path"
+	}
+	sub := strings.TrimSpace(argv[1])
+	if strings.HasPrefix(sub, "-") && sub != "-h" && sub != "--help" {
+		return "path"
+	}
+	if sub == "" {
+		return "path"
+	}
+	return sub
 }
 
 func usage() string {
@@ -951,7 +1024,7 @@ func runConfig(_ context.Context, args []string) int {
 
 func defaultHotkeyConfig() hotkeyConfigFile {
 	// 为便于 diff：按 shortcut 排序输出。
-	falseVal := false
+	trueVal := true
 	delay := 80
 	bindings := []hotkeyBinding{
 		{
@@ -961,7 +1034,7 @@ func defaultHotkeyConfig() hotkeyConfigFile {
 			Action: hotkeyAction{
 				Type: "clip2agent",
 				Args: []string{"path", "--target", "coco", "--copy"},
-				Post: &hotkeyPost{Paste: &hotkeyPaste{Enabled: &falseVal, DelayMs: &delay}},
+				Post: &hotkeyPost{Paste: &hotkeyPaste{Enabled: &trueVal, DelayMs: &delay}},
 			},
 		},
 		{

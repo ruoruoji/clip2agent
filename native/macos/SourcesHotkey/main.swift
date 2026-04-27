@@ -143,6 +143,15 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
   private var lastErrorSummary: String = ""
   private var lastActionSummary: String = ""
 
+  // 用于避免热键频繁触发时弹窗/通知刷屏。
+  private var lastUserNoticeAt: Date = .distantPast
+  private var lastUserNoticeKey: String = ""
+  private var lastBlockingAlertAt: Date = .distantPast
+
+  // 辅助功能权限状态可能在“系统设置”里被切换：用轮询及时刷新菜单栏状态。
+  private var lastAXTrusted: Bool? = nil
+  private var axPollTimer: Timer?
+
   private struct InvalidBinding {
     let displayName: String
     let shortcut: String
@@ -162,26 +171,80 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     NSApp.setActivationPolicy(.accessory)
 
     setupStatusItem()
+    startAccessibilityPoller()
     startConfigWatcher()
     reloadBindingsAndMenu(firstLaunch: true)
     log("started")
   }
 
+  private func startAccessibilityPoller() {
+    // 只在主线程上创建 Timer；用状态变化触发 UI 刷新/提示。
+    if axPollTimer != nil { return }
+    lastAXTrusted = isAccessibilityTrusted()
+    axPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      self.refreshAccessibilityStatus(notifyOnChange: true)
+    }
+    RunLoop.main.add(axPollTimer!, forMode: .common)
+  }
+
+  private func refreshAccessibilityStatus(notifyOnChange: Bool) {
+    let now = isAccessibilityTrusted()
+    if let last = lastAXTrusted, last == now {
+      return
+    }
+    lastAXTrusted = now
+    rebuildMenu()
+    if notifyOnChange {
+      if now {
+        notifyUser(title: "辅助功能权限已授权", message: "自动粘贴已可用（⌘V）", key: "ax_granted", minIntervalSeconds: 3)
+      } else {
+        // 不做高频提示：缺失时的提示在触发热键时会给。
+      }
+    }
+  }
+
   private func setupStatusItem() {
     if statusItem != nil { return }
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    item.button?.title = "C2A"
-    item.button?.toolTip = "clip2agent-hotkey"
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    if let button = item.button {
+      button.toolTip = "clip2agent-hotkey"
+      button.setAccessibilityLabel("C2A")
+      button.imageScaling = .scaleProportionallyDown
+    }
     item.menu = NSMenu()
     statusItem = item
+    setStatus("C2A", tooltip: "clip2agent-hotkey: running")
     rebuildMenu()
   }
 
   private func setStatus(_ title: String, tooltip: String? = nil) {
-    statusItem?.button?.title = title
-    if let tooltip {
-      statusItem?.button?.toolTip = tooltip
+    guard let button = statusItem?.button else { return }
+    let attention = title.hasSuffix("!")
+    if let image = makeStatusImage(attention: attention) {
+      button.image = image
+      button.title = ""
+      button.imagePosition = .imageOnly
+    } else {
+      button.image = nil
+      button.title = title
     }
+    button.setAccessibilityLabel(attention ? "C2A（异常）" : "C2A")
+    if let tooltip {
+      button.toolTip = tooltip
+    }
+  }
+
+  private func makeStatusImage(attention: Bool) -> NSImage? {
+    if #available(macOS 11.0, *) {
+      let symbolName = attention ? "exclamationmark.circle.fill" : "paperclip.circle.fill"
+      guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "C2A") else {
+        return nil
+      }
+      image.isTemplate = true
+      return image
+    }
+    return nil
   }
 
   private func rebuildMenu() {
@@ -291,12 +354,21 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     menu.addItem(NSMenuItem.separator())
 
     // 辅助功能（自动粘贴需要）
-    let axGranted = isAccessibilityTrusted()
+    let axGranted = lastAXTrusted ?? isAccessibilityTrusted()
     let axTitle = axGranted ? "辅助功能权限：已授权" : "辅助功能权限：未授权（自动粘贴需要）"
     let axItem = NSMenuItem(title: axTitle, action: #selector(promptAccessibilityFromMenu), keyEquivalent: "")
     axItem.target = self
     axItem.isEnabled = !axGranted
     menu.addItem(axItem)
+
+    let exe = currentExecutablePath()
+    let exeItem = NSMenuItem(title: "当前热键进程：\(exe)", action: nil, keyEquivalent: "")
+    exeItem.isEnabled = false
+    menu.addItem(exeItem)
+
+    let copyExe = NSMenuItem(title: "复制当前热键进程路径（用于授权）", action: #selector(copyHotkeyExePathFromMenu), keyEquivalent: "")
+    copyExe.target = self
+    menu.addItem(copyExe)
 
     let openAX = NSMenuItem(title: "打开系统设置 → 辅助功能…", action: #selector(openAccessibilitySettingsFromMenu), keyEquivalent: "")
     openAX.target = self
@@ -312,7 +384,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     hotkeyDoctorItem.target = self
     menu.addItem(hotkeyDoctorItem)
 
-    let logsItem = NSMenuItem(title: "打开日志（clip2agent-hotkey.log）", action: #selector(openLogFromMenu), keyEquivalent: "")
+    let logsItem = NSMenuItem(title: "打开日志（clip2agent.log）", action: #selector(openLogFromMenu), keyEquivalent: "")
     logsItem.target = self
     menu.addItem(logsItem)
 
@@ -325,6 +397,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
 
   @objc private func reloadFromMenu() {
     reloadBindingsAndMenu(firstLaunch: false)
+    refreshAccessibilityStatus(notifyOnChange: false)
   }
 
   @objc private func openConfigFromMenu() {
@@ -399,7 +472,19 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
 
   @objc private func promptAccessibilityFromMenu() {
     _ = promptAccessibility()
+    // prompt 触发系统弹窗/跳转后，等一小会再刷新一次；同时保留轮询兜底。
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+      self.refreshAccessibilityStatus(notifyOnChange: false)
+    }
+  }
+
+  @objc private func copyHotkeyExePathFromMenu() {
+    let exe = currentExecutablePath()
+    copyToPasteboard(exe)
+    lastActionSummary = "复制热键进程路径"
+    lastErrorSummary = ""
     rebuildMenu()
+    notifyUser(title: "已复制", message: exe, key: "ax_copy_path", minIntervalSeconds: 2)
   }
 
   @objc private func openAccessibilitySettingsFromMenu() {
@@ -411,8 +496,9 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
   }
 
   private func reloadBindingsAndMenu(firstLaunch: Bool) {
-    let result = loadConfigAndBuildRegistration()
-    if case .failure(let err) = result {
+    // 1) 先只读加载配置；失败时不影响现有热键。
+    let loadResult = loadConfig()
+    if case .failure(let err) = loadResult {
       // 不卸载上一份成功配置：降低“编辑中间态”导致全挂的风险。
       lastErrorSummary = summarize(err)
       setStatus("C2A!", tooltip: "clip2agent-hotkey: \(lastErrorSummary)")
@@ -421,22 +507,39 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
       return
     }
 
-    guard case .success(let applied) = result else {
+    guard case .success(let cfg) = loadResult else {
       rebuildMenu()
       return
     }
 
-    // 若本次配置“启用了快捷键但全部注册失败”，视为 reload 失败，保留旧配置。
+    // 2) 再执行注册。
+    // 重要：reload 时如果先注册新热键、再注销旧热键，会导致 RegisterEventHotKey 因“已存在”而全部失败。
+    // 因此这里先备份当前成功配置，先注销，再尝试注册新配置；若新配置全部失败，则回滚到上一份成功配置。
+    let prevBindings = allBindings
+    unregisterAllHotkeys()
+    let applied = buildRegistration(cfg: cfg)
+
+    // 若本次配置“启用了快捷键但全部注册失败”，视为 reload 失败，尽力恢复旧配置。
     if applied.enabledCount > 0 && applied.registeredCount == 0 {
       invalidBindings = applied.invalidBindings
       lastErrorSummary = applied.errorSummary.isEmpty ? "hotkey.json 启用的快捷键均不可用（保留上一次成功配置）" : applied.errorSummary
       setStatus("C2A!", tooltip: "clip2agent-hotkey: \(lastErrorSummary)")
+
+      if !prevBindings.isEmpty {
+        let restored = buildRegistration(cfg: HotkeyConfigFile(bindings: prevBindings))
+        hotKeyRefs = restored.hotKeyRefs
+        bindingsByID = restored.bindingsByID
+        allBindings = restored.allBindings
+        invalidBindings = restored.invalidBindings
+        lastLoadRegistered = restored.registeredCount
+        lastLoadEnabled = restored.enabledCount
+      }
+
       rebuildMenu()
       return
     }
 
     // 应用新的注册结果
-    unregisterAllHotkeys()
     hotKeyRefs = applied.hotKeyRefs
     bindingsByID = applied.bindingsByID
     allBindings = applied.allBindings
@@ -474,7 +577,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     let errorSummary: String
   }
 
-  private func loadConfigAndBuildRegistration() -> Result<RegistrationBuild, Error> {
+  private func loadConfig() -> Result<HotkeyConfigFile, Error> {
     let url = configURL()
     do {
       let data = try Data(contentsOf: url)
@@ -482,7 +585,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
       if cfg.bindings.isEmpty {
         throw NSError(domain: "clip2agent-hotkey", code: 2, userInfo: [NSLocalizedDescriptionKey: "bindings 为空: \(url.path)"])
       }
-      return .success(buildRegistration(cfg: cfg))
+      return .success(cfg)
     } catch {
       return .failure(error)
     }
@@ -683,19 +786,29 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
 
   private func runAndMaybePaste(binding: HotkeyConfigFile.Binding, command: String, args: [String], extraEnv: [String: String]?) {
     let summary = binding.displayName
+    let traceID = UUID().uuidString
+    var env = extraEnv ?? [:]
+    env["CLIP2AGENT_TRACE_ID"] = traceID
+    env["CLIP2AGENT_INVOKER"] = "hotkey"
+
+    log("trigger start: trace_id=\(traceID) binding=\(summary) command=\(commandPreview(command: command, args: args))")
     DispatchQueue.main.async {
       self.lastActionSummary = summary
       self.rebuildMenu()
     }
 
-    let (ok, errMsg) = runBlocking(command: command, args: args, extraEnv: extraEnv)
+    let (ok, errMsg) = runBlocking(command: command, args: args, extraEnv: env, traceID: traceID)
     if !ok {
+      log("trigger failed: trace_id=\(traceID) binding=\(summary) err=\(errMsg)")
       DispatchQueue.main.async {
+        self.lastActionSummary = "\(summary)（失败）"
         self.lastErrorSummary = errMsg
         self.rebuildMenu()
       }
       return
     }
+
+    let copiedHint = args.contains("--copy")
 
     if shouldAutoPaste(binding.action) {
       let ms = pasteDelayMs(binding.action)
@@ -705,14 +818,96 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
 
       if isAccessibilityTrusted() {
         pasteCmdV()
+        log("trigger success: trace_id=\(traceID) binding=\(summary) copied=\(copiedHint) pasted=true")
+        DispatchQueue.main.async {
+          self.lastActionSummary = copiedHint ? "\(summary)（已复制并粘贴）" : "\(summary)（已粘贴）"
+          self.lastErrorSummary = ""
+          self.rebuildMenu()
+          self.notifyUser(title: "已粘贴", message: self.lastActionSummary, key: "ok_paste_\(summary)", minIntervalSeconds: 2)
+        }
       } else {
         // 降级：只 copy，不粘贴。
+        log("trigger warning: trace_id=\(traceID) binding=\(summary) copied=true pasted=false reason=accessibility_not_granted")
+        log("hint: 请在菜单中点击“辅助功能权限：未授权（自动粘贴需要）”，或到 系统设置→隐私与安全性→辅助功能 授权 clip2agent-hotkey（以及你的终端/IDE）")
         DispatchQueue.main.async {
-          self.lastErrorSummary = "未授予辅助功能权限：已复制未粘贴"
+          self.lastActionSummary = copiedHint ? "\(summary)（已复制，未粘贴）" : "\(summary)（未粘贴）"
+          self.lastErrorSummary = "未授予辅助功能权限：已复制未粘贴（菜单中可一键引导授权）"
           self.rebuildMenu()
+          self.notifyUser(title: "需要辅助功能权限", message: self.lastErrorSummary, key: "ax_denied", minIntervalSeconds: 15)
+          self.maybeShowAccessibilityAlertOnce()
         }
       }
+    } else {
+      log("trigger success: trace_id=\(traceID) binding=\(summary) copied=\(copiedHint) pasted=false reason=auto_paste_disabled")
+      DispatchQueue.main.async {
+        self.lastActionSummary = copiedHint ? "\(summary)（已复制）" : "\(summary)（执行成功）"
+        self.lastErrorSummary = ""
+        self.rebuildMenu()
+        self.notifyUser(title: "执行成功", message: self.lastActionSummary, key: "ok_nopaste_\(summary)", minIntervalSeconds: 2)
+      }
     }
+  }
+
+  private func notifyUser(title: String, message: String, key: String, minIntervalSeconds: TimeInterval) {
+    let now = Date()
+    if key == lastUserNoticeKey && now.timeIntervalSince(lastUserNoticeAt) < minIntervalSeconds {
+      return
+    }
+    lastUserNoticeAt = now
+    lastUserNoticeKey = key
+
+    // 使用系统通知（横幅/通知中心），不阻塞热键链路。
+    let n = NSUserNotification()
+    n.title = title
+    n.informativeText = message
+    n.soundName = nil
+    NSUserNotificationCenter.default.deliver(n)
+  }
+
+  private func currentExecutablePath() -> String {
+    // 对“命令行/LaunchAgent”形态，Bundle.main.executablePath 可能为空；退化为 argv[0]。
+    let raw = Bundle.main.executablePath ?? CommandLine.arguments.first ?? "-"
+    if raw == "-" { return raw }
+    if raw.hasPrefix("/") {
+      return URL(fileURLWithPath: raw).standardizedFileURL.path
+    }
+    let cwd = FileManager.default.currentDirectoryPath
+    return URL(fileURLWithPath: cwd).appendingPathComponent(raw).standardizedFileURL.path
+  }
+
+  private func copyToPasteboard(_ s: String) {
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString(s, forType: .string)
+  }
+
+  private func maybeShowAccessibilityAlertOnce() {
+    // 对“权限缺失”给一个更强提示，但必须限流，避免每次热键都弹窗。
+    let now = Date()
+    if now.timeIntervalSince(lastBlockingAlertAt) < 30 {
+      return
+    }
+    lastBlockingAlertAt = now
+
+    log("showing accessibility alert")
+
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "需要辅助功能权限才能自动粘贴"
+    let exe = currentExecutablePath()
+    alert.informativeText = "已复制到剪贴板，但系统未授予辅助功能权限，无法自动执行 ⌘V。\n\n请在 系统设置→隐私与安全性→辅助功能 中勾选当前运行的：\n\(exe)\n\n（常见原因：你授权了旧路径/另一个版本，所以这里仍显示未授权）"
+    alert.addButton(withTitle: "打开系统设置")
+    alert.addButton(withTitle: "复制路径")
+    alert.addButton(withTitle: "稍后")
+    _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+    let ret = alert.runModal()
+    if ret == .alertFirstButtonReturn {
+      openAccessibilitySettings()
+    } else if ret == .alertSecondButtonReturn {
+      copyToPasteboard(exe)
+      notifyUser(title: "已复制", message: exe, key: "ax_copy_path", minIntervalSeconds: 2)
+    }
+    log("accessibility alert dismissed")
   }
 
   private func runAndUpdateSummary(command: String, args: [String], summary: String) {
@@ -735,7 +930,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func runBlockingCapture(command: String, args: [String], extraEnv: [String: String]?) -> (ok: Bool, stdout: String, stderr: String, errSummary: String) {
+  private func runBlockingCapture(command: String, args: [String], extraEnv: [String: String]?, traceID: String? = nil) -> (ok: Bool, stdout: String, stderr: String, errSummary: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     p.arguments = [command] + args
@@ -756,14 +951,27 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
       let out = (String(data: outData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       let err = (String(data: errData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       if p.terminationStatus == 0 {
+        if let traceID, !traceID.isEmpty {
+          log("command ok: trace_id=\(traceID) \(commandPreview(command: command, args: args)) stdout=\(summarizeOptionalString(out)) stderr=\(summarizeOptionalString(err))")
+        } else {
+          log("command ok: \(commandPreview(command: command, args: args)) stdout=\(summarizeOptionalString(out)) stderr=\(summarizeOptionalString(err))")
+        }
         return (true, out, err, "")
       }
       let sum = err.isEmpty ? "exit=\(p.terminationStatus)" : summarizeString(err)
-      log("command failed: \(command) (status=\(p.terminationStatus)) err=\(err)")
+      if let traceID, !traceID.isEmpty {
+        log("command failed: trace_id=\(traceID) \(command) (status=\(p.terminationStatus)) err=\(err)")
+      } else {
+        log("command failed: \(command) (status=\(p.terminationStatus)) err=\(err)")
+      }
       return (false, out, err, sum)
     } catch {
       let s = summarize(error)
-      log("exec error: \(s)")
+      if let traceID, !traceID.isEmpty {
+        log("exec error: trace_id=\(traceID) \(s)")
+      } else {
+        log("exec error: \(s)")
+      }
       return (false, "", "", s)
     }
   }
@@ -812,7 +1020,7 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func runBlocking(command: String, args: [String], extraEnv: [String: String]?) -> (ok: Bool, errSummary: String) {
+  private func runBlocking(command: String, args: [String], extraEnv: [String: String]?, traceID: String? = nil) -> (ok: Bool, errSummary: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     p.arguments = [command] + args
@@ -832,20 +1040,41 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     do {
       try p.run()
       p.waitUntilExit()
+      let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
       if p.terminationStatus == 0 {
+        let out = (String(data: outData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let err = (String(data: errData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let traceID, !traceID.isEmpty {
+          log("command ok: trace_id=\(traceID) \(commandPreview(command: command, args: args)) stdout=\(summarizeOptionalString(out)) stderr=\(summarizeOptionalString(err))")
+        } else {
+          log("command ok: \(commandPreview(command: command, args: args)) stdout=\(summarizeOptionalString(out)) stderr=\(summarizeOptionalString(err))")
+        }
         return (true, "")
       }
       let data = errPipe.fileHandleForReading.readDataToEndOfFile()
       let msg = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       if msg.isEmpty {
-        log("command failed: \(command) \(args.joined(separator: " ")) (status=\(p.terminationStatus))")
+        if let traceID, !traceID.isEmpty {
+          log("command failed: trace_id=\(traceID) \(command) \(args.joined(separator: " ")) (status=\(p.terminationStatus))")
+        } else {
+          log("command failed: \(command) \(args.joined(separator: " ")) (status=\(p.terminationStatus))")
+        }
         return (false, "exit=\(p.terminationStatus)")
       }
-      log("command failed: \(command) (status=\(p.terminationStatus)) err=\(msg)")
+      if let traceID, !traceID.isEmpty {
+        log("command failed: trace_id=\(traceID) \(command) (status=\(p.terminationStatus)) err=\(msg)")
+      } else {
+        log("command failed: \(command) (status=\(p.terminationStatus)) err=\(msg)")
+      }
       return (false, summarizeString(msg))
     } catch {
       let s = summarize(error)
-      log("exec error: \(s)")
+      if let traceID, !traceID.isEmpty {
+        log("exec error: trace_id=\(traceID) \(s)")
+      } else {
+        log("exec error: \(s)")
+      }
       return (false, s)
     }
   }
@@ -855,6 +1084,17 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
     if trimmed.count <= 140 { return trimmed }
     let idx = trimmed.index(trimmed.startIndex, offsetBy: 140)
     return String(trimmed[..<idx]) + "…"
+  }
+
+  private func summarizeOptionalString(_ s: String) -> String {
+    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return "-" }
+    return summarizeString(trimmed)
+  }
+
+  private func commandPreview(command: String, args: [String]) -> String {
+    let joined = ([command] + args).joined(separator: " ")
+    return summarizeString(joined)
   }
 
   private func isAccessibilityTrusted() -> Bool {
@@ -909,16 +1149,17 @@ final class HotkeyDaemon: NSObject, NSApplicationDelegate {
   }
 
   private func logURL() -> URL {
-    // 与 Go 侧 `clip2agent hotkey logs` 一致。
+    // 与 Go 侧 `clip2agent hotkey logs` 一致（统一日志）。
     let home = FileManager.default.homeDirectoryForCurrentUser
     return home
       .appendingPathComponent("Library", isDirectory: true)
       .appendingPathComponent("Logs", isDirectory: true)
-      .appendingPathComponent("clip2agent-hotkey.log")
+      .appendingPathComponent("clip2agent.log")
   }
 
   private func log(_ msg: String) {
-    fputs("[clip2agent-hotkey] \(msg)\n", stderr)
+    let ts = ISO8601DateFormatter().string(from: Date())
+    fputs("[clip2agent-hotkey] \(ts) \(msg)\n", stderr)
   }
 }
 

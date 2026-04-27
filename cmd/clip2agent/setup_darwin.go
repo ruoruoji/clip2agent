@@ -38,7 +38,7 @@ func runSetup(ctx context.Context, args []string) int {
 	fs.BoolVar(&withLaunchd, "launchd", true, "安装并启动 LaunchAgent（仅当 hotkey=true）")
 	fs.BoolVar(&forceConfig, "force-config", false, "覆盖 hotkey.json")
 	fs.BoolVar(&rebuild, "rebuild", false, "强制重新 swift build")
-	fs.BoolVar(&verify, "verify", false, "只做检查并输出下一步建议（无副作用）")
+	fs.BoolVar(&verify, "verify", false, "只做安装后检查并输出下一步建议（无副作用）")
 	fs.BoolVar(&jsonOut, "json", false, "配合 --verify 输出 JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -230,12 +230,14 @@ func runSetup(ctx context.Context, args []string) int {
 	}
 	fmt.Println("next:")
 	fmt.Println("- 运行: clip2agent doctor")
+	fmt.Println("- 安装后验证: clip2agent setup --verify")
 	if withHotkey {
 		fmt.Println("- 运行: clip2agent hotkey doctor")
 		fmt.Println("- 菜单栏：找到 C2A（clip2agent-hotkey）")
 		fmt.Println("- 若启用自动粘贴：给你的终端与 clip2agent-hotkey 授予 系统设置→隐私与安全性→辅助功能 权限")
 		fmt.Println("- 触发热键：control+option+command+v")
 	}
+	fmt.Println("- 若当前环境混乱或有残留，先清理再重装: clip2agent uninstall --purge --yes")
 	return 0
 }
 
@@ -336,6 +338,17 @@ func ensureHotkeyConfig(force bool) error {
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
+	same, err := sameFileTarget(src, dst)
+	if err != nil {
+		return errs.WrapCode("E007", "检查源文件和目标文件关系失败", err)
+	}
+	if same {
+		if err := os.Chmod(dst, mode); err != nil && !os.IsNotExist(err) {
+			return errs.WrapCode("E007", "更新目标文件权限失败", err)
+		}
+		return nil
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return errs.WrapCode("E007", "读取源文件失败", err)
@@ -357,15 +370,45 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
+func sameFileTarget(src, dst string) (bool, error) {
+	if strings.TrimSpace(src) == "" || strings.TrimSpace(dst) == "" {
+		return false, nil
+	}
+
+	srcAbs, err := filepath.Abs(src)
+	if err != nil {
+		return false, err
+	}
+	dstAbs, err := filepath.Abs(dst)
+	if err != nil {
+		return false, err
+	}
+	if filepath.Clean(srcAbs) == filepath.Clean(dstAbs) {
+		return true, nil
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return false, err
+	}
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return os.SameFile(srcInfo, dstInfo), nil
+}
+
 func installAndStartLaunchAgent(binDir, clip2agentPath, helperPath, hotkeyPath string) error {
 	uid := os.Getuid()
 	label := paths.HotkeyLaunchAgentLabel
 	plistPath := paths.HotkeyLaunchAgentPlistPath()
-	h, _ := os.UserHomeDir()
 	if strings.TrimSpace(plistPath) == "" {
 		return errs.E("E007", "获取 LaunchAgent plist 路径失败")
 	}
-	logPath := filepath.Join(h, "Library", "Logs", "clip2agent-hotkey.log")
+	logPath := paths.HotkeyLogPath()
 
 	if strings.TrimSpace(hotkeyPath) == "" {
 		return errs.E("E006", "clip2agent-hotkey 路径为空")

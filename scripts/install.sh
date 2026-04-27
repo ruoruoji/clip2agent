@@ -211,26 +211,12 @@ trap 'rm -rf "$tmpdir"' EXIT INT TERM
 mkdir -p "$BIN_DIR"
 
 if ! download "$base_url/$checksums_asset" "$tmpdir/$checksums_asset"; then
-  echo "==> GitHub Releases assets not found for ${REPO} (${VERSION}); falling back to 'go install'" >&2
-  need_cmd go
-
-  pkg="github.com/${REPO}/cmd/clip2agent"
-  if [ "$VERSION" = "latest" ]; then
-    goversion="@latest"
-  else
-    goversion="@${VERSION}"
-  fi
-
-  GOBIN="$BIN_DIR" go install "${pkg}${goversion}"
-  echo "==> Installed to $BIN_DIR"
-  echo "==> clip2agent version source: go install ${goversion}"
-
-  if [ "$goos" = "darwin" ] && [ "$INSTALL_MACOS_HELPERS" = "true" ]; then
-    echo "==> Note: macOS helpers are not installed in fallback mode; build from source if needed." >&2
-  fi
-
-  echo "==> Done"
-  exit 0
+  echo "==> GitHub Releases assets not found for ${REPO} (${VERSION})." >&2
+  echo "==> Please publish a Release first, or install via Go/toolchain manually:" >&2
+  echo "==>   go install github.com/${REPO}/cmd/clip2agent@latest" >&2
+  echo "==> Or run from source in the repo:" >&2
+  echo "==>   go run ./cmd/clip2agent --help" >&2
+  exit 1
 fi
 
 # If VERSION=latest, Releases 下载链接仍然是 latest/download/，但 asset 文件名里不包含 "latest"。

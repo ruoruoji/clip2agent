@@ -31,6 +31,21 @@ cd native/macos
 swift build -c release
 ```
 
+### 本地开发重置（清理后重装）
+
+当你需要清理现有环境、重新验证安装链路时，按下面顺序执行：
+
+```bash
+go run ./cmd/clip2agent uninstall --dry-run --verbose
+go run ./cmd/clip2agent uninstall --purge --yes
+go run ./cmd/clip2agent doctor
+go run ./cmd/clip2agent setup
+go run ./cmd/clip2agent setup --verify
+```
+
+- `doctor` 更适合清理后的残留检查；`setup --verify` 更适合安装后验证
+- 涉及安装 / 卸载 / 开发流程变更时，请同步更新 `README.md`、帮助文案与诊断输出
+
 ## 提交规范
 
 - 保持 PR 尽量小而清晰，避免同时混入无关重构。

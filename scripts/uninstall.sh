@@ -9,20 +9,21 @@ YES="${YES:-false}"
 
 usage() {
   cat <<'EOF'
-Uninstall clip2agent.
+卸载 clip2agent。
 
-Usage:
+用法：
   sh uninstall.sh [--bin-dir /path] [--dry-run] [--purge --yes]
 
-Environment variables:
-  BIN_DIR   Uninstall directory for binaries, default: ~/.local/bin
-  DRY_RUN   true|false, default: false
-  PURGE     true|false, default: false (danger: remove kept-dir via CLI)
-  YES       true|false, default: false (required with PURGE)
+环境变量：
+  BIN_DIR   二进制卸载目录，默认：~/.local/bin
+  DRY_RUN   true|false，默认：false
+  PURGE     true|false，默认：false（危险：通过 CLI 删除 kept-dir）
+  YES       true|false，默认：false（PURGE=true 时必填）
 
-Notes:
-  - Prefer calling: $BIN_DIR/clip2agent uninstall --bin-dir $BIN_DIR
-  - If clip2agent is missing, falls back to minimal removal only.
+说明：
+  - 推荐优先调用：$BIN_DIR/clip2agent uninstall --bin-dir $BIN_DIR
+  - 本地开发重置建议先执行 dry-run，再执行: clip2agent uninstall --purge --yes
+  - 如果 clip2agent 不存在，脚本只会回退到最小清理，不代表完整开发态 reset
 EOF
 }
 
@@ -56,7 +57,7 @@ while [ "$#" -gt 0 ]; do
       exit 0
       ;;
     *)
-      echo "unknown argument: $1" >&2
+      echo "未知参数: $1" >&2
       usage >&2
       exit 1
       ;;
@@ -81,10 +82,10 @@ if is_true "$PURGE"; then
 fi
 
 if [ -x "$cli" ]; then
-  echo "==> Uninstalling via $cli"
+  echo "==> 通过 $cli 执行卸载"
   # shellcheck disable=SC2086
   "$cli" $cli_args
-  echo "==> Done"
+  echo "==> 完成"
   exit 0
 fi
 
@@ -104,17 +105,19 @@ if is_true "$DRY_RUN"; then
   if [ "$os" = "darwin" ]; then
     echo "plan: launchctl bootout gui/$(id -u)/dev.clip2agent-hotkey (best-effort)"
     echo "plan: remove $HOME/Library/LaunchAgents/dev.clip2agent-hotkey.plist"
-    echo "plan: remove $HOME/Library/Logs/clip2agent-hotkey.log"
+    echo "plan: remove $HOME/Library/Logs/clip2agent.log"
   fi
   if [ "$os" = "linux" ]; then
     echo "plan: remove $xdg_cfg/clip2agent/xbindkeys.conf"
     echo "plan: remove $xdg_cfg/autostart/clip2agent-xbindkeys.desktop"
   fi
-  echo "==> Done"
+  echo "next: 确认清理范围后，再执行彻底清理"
+  echo "next: clip2agent uninstall --purge --yes"
+  echo "==> 完成"
   exit 0
 fi
 
-echo "==> clip2agent not found in $BIN_DIR; falling back to minimal removal" >&2
+echo "==> 未在 $BIN_DIR 找到 clip2agent；回退到最小清理" >&2
 
 if [ "$os" = "darwin" ]; then
   uid=$(id -u 2>/dev/null || echo "")
@@ -122,7 +125,7 @@ if [ "$os" = "darwin" ]; then
     launchctl bootout "gui/${uid}/dev.clip2agent-hotkey" >/dev/null 2>&1 || true
   fi
   rm -f "$HOME/Library/LaunchAgents/dev.clip2agent-hotkey.plist" || true
-  rm -f "$HOME/Library/Logs/clip2agent-hotkey.log" || true
+  rm -f "$HOME/Library/Logs/clip2agent.log" || true
 fi
 
 if [ "$os" = "linux" ]; then
@@ -135,4 +138,4 @@ xdg_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
 rm -f "$xdg_cfg/clip2agent/hotkey.json" || true
 rm -f "$BIN_DIR/clip2agent" "$BIN_DIR/clip2agent-macos" "$BIN_DIR/clip2agent-hotkey" || true
 
-echo "==> Done"
+echo "==> 完成（最小清理；如需完整开发态重置，请恢复 CLI 后执行 clip2agent uninstall --purge --yes）"

@@ -21,7 +21,7 @@ import (
 // - `clip2agent hotkey trigger --id N`：执行单个 binding（用于调试/脚本）
 func runHotkey(ctx context.Context, args []string) int {
 	if len(args) < 1 {
-		errs.Fprint(os.Stderr, errs.E("E006", "用法: clip2agent hotkey <run|trigger|doctor|test>"))
+		errs.Fprint(os.Stderr, errs.E("E006", "用法: clip2agent hotkey <run|trigger|doctor|test|logs>"))
 		fmt.Fprintln(os.Stderr)
 		return 2
 	}
@@ -30,6 +30,7 @@ func runHotkey(ctx context.Context, args []string) int {
 		cfgPath := paths.HotkeyConfigPath()
 		_, err := os.Stat(cfgPath)
 		fmt.Printf("hotkey_config: %s (exists=%v)\n", cfgPath, err == nil)
+		fmt.Printf("hotkey_log: %s\n", paths.HotkeyLogPath())
 		if _, err := loadHotkeyConfig(); err != nil {
 			errs.Fprint(os.Stderr, errs.E("E006", "hotkey 配置不可用", errs.Hint("运行: clip2agent config init --force"), errs.Cause(err)))
 			fmt.Fprintln(os.Stderr)
@@ -58,13 +59,21 @@ func runHotkey(ctx context.Context, args []string) int {
 			fmt.Fprintln(os.Stderr)
 			return 2
 		}
-		if err := executeHotkeyAction(ctx, cfg.Bindings[id-1].Action); err != nil {
+		binding := cfg.Bindings[id-1]
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=test binding=%s action=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), hotkeyActionPreview(binding.Action))
+		if err := executeHotkeyAction(ctx, binding.Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=test binding=%s err=%v", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=test binding=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)))
 		fmt.Println("ok")
 		return 0
+	}
+	if sub == "logs" {
+		return runHotkeyLogs(ctx)
 	}
 	if sub == "trigger" {
 		id := 0
@@ -90,15 +99,20 @@ func runHotkey(ctx context.Context, args []string) int {
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
-		if err := executeHotkeyAction(ctx, cfg.Bindings[id-1].Action); err != nil {
+		binding := cfg.Bindings[id-1]
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=trigger binding=%s action=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), hotkeyActionPreview(binding.Action))
+		if err := executeHotkeyAction(ctx, binding.Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=trigger binding=%s err=%v", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=trigger binding=%s", traceID, hotkeyBindingLabel(binding, fmt.Sprintf("id=%d", id)))
 		return 0
 	}
 	if sub != "run" {
-		errs.Fprint(os.Stderr, errs.E("E006", "不支持的 hotkey 子命令", errs.Hint("支持: run/trigger/doctor/test")))
+		errs.Fprint(os.Stderr, errs.E("E006", "不支持的 hotkey 子命令", errs.Hint("支持: run/trigger/doctor/test/logs")))
 		fmt.Fprintln(os.Stderr)
 		return 2
 	}
@@ -186,13 +200,19 @@ func runHotkey(ctx context.Context, args []string) int {
 	var last time.Time
 	runAction := func(b hotkeyBinding) {
 		if time.Since(last) < 200*time.Millisecond {
+			hotkeyLogf("trigger skipped: source=run binding=%s reason=debounce", hotkeyBindingLabel(b, b.Shortcut))
 			return
 		}
 		last = time.Now()
-		if err := executeHotkeyAction(ctx, b.Action); err != nil {
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=run binding=%s action=%s", traceID, hotkeyBindingLabel(b, b.Shortcut), hotkeyActionPreview(b.Action))
+		if err := executeHotkeyAction(ctx, b.Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=run binding=%s err=%v", traceID, hotkeyBindingLabel(b, b.Shortcut), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
+			return
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=run binding=%s", traceID, hotkeyBindingLabel(b, b.Shortcut))
 	}
 
 	// 消息循环（阻塞）
@@ -271,17 +291,17 @@ func parseShortcutWindows(raw string) (vk uint32, mods winMods, err error) {
 	return 0, winMods{}, fmt.Errorf("不支持的 key: %s", key)
 }
 
-func executeHotkeyAction(ctx context.Context, action hotkeyAction) error {
+func executeHotkeyAction(ctx context.Context, action hotkeyAction, traceID string) error {
 	t := strings.ToLower(strings.TrimSpace(action.Type))
 	switch t {
 	case "clip2agent":
 		cmd := resolveClip2AgentCommandWindows(action)
-		return runExternal(ctx, cmd, action.Args, action.Env)
+		return runExternal(ctx, cmd, action.Args, action.Env, traceID, "hotkey")
 	case "exec":
 		if strings.TrimSpace(action.Command) == "" {
 			return nil
 		}
-		return runExternal(ctx, action.Command, action.Args, action.Env)
+		return runExternal(ctx, action.Command, action.Args, action.Env, traceID, "hotkey")
 	default:
 		return errs.E("E006", "不支持的 hotkey action.type", errs.Hint("支持: clip2agent/exec"))
 	}

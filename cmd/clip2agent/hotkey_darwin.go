@@ -24,13 +24,12 @@ func runHotkey(ctx context.Context, args []string) int {
 	label := paths.HotkeyLaunchAgentLabel
 	uid := os.Getuid()
 	plistPath := paths.HotkeyLaunchAgentPlistPath()
-	h, _ := os.UserHomeDir()
 	if strings.TrimSpace(plistPath) == "" {
 		errs.Fprint(os.Stderr, errs.E("E007", "获取 LaunchAgent plist 路径失败"))
 		fmt.Fprintln(os.Stderr)
 		return 1
 	}
-	logPath := filepath.Join(h, "Library", "Logs", "clip2agent-hotkey.log")
+	logPath := paths.HotkeyLogPath()
 	service := "gui/" + strconv.Itoa(uid) + "/" + label
 
 	sub := strings.ToLower(strings.TrimSpace(args[0]))
@@ -38,6 +37,7 @@ func runHotkey(ctx context.Context, args []string) int {
 	case "doctor":
 		cfgPath := paths.HotkeyConfigPath()
 		fmt.Printf("hotkey_config: %s (exists=%v)\n", cfgPath, fileExists(cfgPath))
+		fmt.Printf("log: %s\n", strings.TrimSpace(paths.LogPath()))
 		if _, err := loadHotkeyConfig(); err != nil {
 			errs.Fprint(os.Stderr, errs.E("E006", "hotkey 配置不可用", errs.Hint("运行: clip2agent config init --force"), errs.Cause(err)))
 			fmt.Fprintln(os.Stderr)
@@ -100,11 +100,15 @@ func runHotkey(ctx context.Context, args []string) int {
 			fmt.Fprintln(os.Stderr)
 			return 2
 		}
-		if err := executeActionOnceDarwin(ctx, cfg.Bindings[id-1].Action); err != nil {
+		traceID := newTraceID()
+		hotkeyLogf("trigger start: trace_id=%s source=test binding=%s action=%s", traceID, hotkeyBindingLabel(cfg.Bindings[id-1], fmt.Sprintf("id=%d", id)), hotkeyActionPreview(cfg.Bindings[id-1].Action))
+		if err := executeActionOnceDarwin(ctx, cfg.Bindings[id-1].Action, traceID); err != nil {
+			hotkeyLogf("trigger failed: trace_id=%s source=test binding=%s err=%v", traceID, hotkeyBindingLabel(cfg.Bindings[id-1], fmt.Sprintf("id=%d", id)), err)
 			errs.Fprint(os.Stderr, err)
 			fmt.Fprintln(os.Stderr)
 			return 1
 		}
+		hotkeyLogf("trigger success: trace_id=%s source=test binding=%s", traceID, hotkeyBindingLabel(cfg.Bindings[id-1], fmt.Sprintf("id=%d", id)))
 		fmt.Println("ok")
 		return 0
 	case "install":
@@ -166,17 +170,17 @@ func runHotkey(ctx context.Context, args []string) int {
 	}
 }
 
-func executeActionOnceDarwin(ctx context.Context, action hotkeyAction) error {
+func executeActionOnceDarwin(ctx context.Context, action hotkeyAction, traceID string) error {
 	t := strings.ToLower(strings.TrimSpace(action.Type))
 	switch t {
 	case "clip2agent":
 		cmd := resolveClip2AgentCommandDarwin(action)
-		return runExternal(ctx, cmd, action.Args, action.Env)
+		return runExternal(ctx, cmd, action.Args, action.Env, traceID, "hotkey")
 	case "exec":
 		if strings.TrimSpace(action.Command) == "" {
 			return nil
 		}
-		return runExternal(ctx, action.Command, action.Args, action.Env)
+		return runExternal(ctx, action.Command, action.Args, action.Env, traceID, "hotkey")
 	default:
 		return errs.E("E006", "不支持的 hotkey action.type", errs.Hint("支持: clip2agent/exec"))
 	}
